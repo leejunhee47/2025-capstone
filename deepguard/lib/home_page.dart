@@ -5,6 +5,9 @@ import 'history_tab.dart'; // 탐지 기록 탭
 import 'package:flutter/services.dart';
 // import 'login_page.dart'; // 로그인 페이지 (실제 구현 시 필요)
 
+import 'dart:async'; // StreamSubscription을 위해 임포트
+import 'package:receive_sharing_intent/receive_sharing_intent.dart';
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -20,17 +23,44 @@ String globalUserNickname = "";
 class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   late TabController tabController;
 
+  StreamSubscription? _intentMediaSub;
+  String? _sharedText;
+
   @override
   void initState() {
     super.initState();
     tabController = TabController(length: 2, vsync: this);
-    // TODO: 앱 시작 시 실제 로그인 상태 확인 로직 (예: SharedPreferences)
-    // 예시: _loadLoginStatus();
+
+    _intentMediaSub = ReceiveSharingIntent.instance.getMediaStream().listen((
+      List<SharedMediaFile> value,
+    ) {
+      if (value.isNotEmpty) {
+        final String sharedUrl = value.first.path;
+        setState(() {
+          _sharedText = sharedUrl;
+        });
+        tabController.animateTo(0);
+      }
+    });
+
+    ReceiveSharingIntent.instance.getInitialMedia().then((
+      List<SharedMediaFile> value,
+    ) {
+      if (value.isNotEmpty) {
+        final String sharedUrl = value.first.path;
+        setState(() {
+          _sharedText = sharedUrl;
+        });
+        Future.microtask(() => tabController.animateTo(0));
+        ReceiveSharingIntent.instance.reset();
+      }
+    });
   }
 
   @override
   void dispose() {
     tabController.dispose();
+    _intentMediaSub?.cancel();
     super.dispose();
   }
 
@@ -76,11 +106,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       statusBarColor: Color.fromARGB(255, 22, 101, 175),
 
       // 상태바 아이콘 색상 (Android)
-      // 배경이 밝은 회색이므로 아이콘은 어둡게 (dark)
       statusBarIconBrightness: Brightness.dark,
 
       // 상태바 아이콘 색상 (iOS)
-      // 배경이 밝으므로 아이콘은 어둡게 (light가 어두운 아이콘임)
       statusBarBrightness: Brightness.light,
     );
 
@@ -88,14 +116,11 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       value: customSystemOverlayStyle,
       child: Scaffold(
         appBar: GFAppBar(
-          // --- AppBar 디자인 수정 ---
-          backgroundColor: GFColors.WHITE, // AppBar 배경 흰색
-          iconTheme: const IconThemeData(color: Colors.black54), // 아이콘 색상
-          // titleTextStyle 삭제
-          elevation: 1.0, // 약간의 그림자 효과
-          // --- AppBar 디자인 수정 끝 ---
+          backgroundColor: GFColors.WHITE,
+          iconTheme: const IconThemeData(color: Colors.black54),
+          elevation: 1.0,
           leading: Padding(
-            padding: const EdgeInsets.only(top: 8.0), // 상단 여백 추가
+            padding: const EdgeInsets.only(top: 8.0),
             child: SizedBox(
               height: kToolbarHeight + 8.0,
               child: Center(
@@ -112,7 +137,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   tooltip: isLoggedIn ? '내 정보 / 로그아웃' : '로그인 / 회원가입',
                   onPressed: () {
                     if (isLoggedIn) {
-                      // 로그인 상태: 내 정보 팝업 또는 로그아웃 확인
                       showDialog(
                         context: context,
                         builder: (BuildContext context) {
@@ -133,7 +157,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                 ),
                                 onPressed: () {
                                   Navigator.of(context).pop();
-                                  _logout(); // 로그아웃 함수 호출
+                                  _logout();
                                 },
                               ),
                             ],
@@ -141,7 +165,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                         },
                       );
                     } else {
-                      // 로그아웃 상태: 로그인 페이지로 이동
                       Navigator.of(context).pushNamed('/login').then((_) {
                         setState(() {});
                       });
@@ -152,14 +175,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             ),
           ),
 
-          // title 에 직접 스타일 적용
-          // --- [수정 2] title을 Padding으로 감싸기 ---
           title: Padding(
-            padding: const EdgeInsets.only(top: 8.0), // 상단 여백 추가
+            padding: const EdgeInsets.only(top: 8.0),
             child: Container(
-              // 1. leading과 동일한 높이 지정
               height: kToolbarHeight + 8.0,
-              // 2. 텍스트를 (수직)중앙, (수평)좌측 정렬
               alignment: Alignment.center,
               child: const Text(
                 'DeepGuard',
@@ -170,18 +189,14 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 ),
               ),
             ),
-          ), // 앱 이름 고정
-          // --- [수정 3] actions 안의 Padding 수정 ---
+          ),
           actions: <Widget>[
             Padding(
-              padding: const EdgeInsets.only(top: 4.0), // 상단 여백 추가
+              padding: const EdgeInsets.only(top: 4.0),
               child: Container(
-                // 1. leading/title과 동일한 높이 지정
                 height: kToolbarHeight + 8.0,
-                // 2. 버튼을 (수직)중앙 정렬
                 alignment: Alignment.center,
                 child: Padding(
-                  // 3. 좌우 여백만 유지
                   padding: const EdgeInsets.symmetric(horizontal: 8.0),
                   child: TextButton(
                     onPressed: _toggleLoginForDev,
@@ -205,19 +220,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 ),
               ),
             ),
-            // --- 개발용 버튼 끝 ---
-          ], // --- actions 끝 ---
-          // 탭 바 구성
+          ],
           bottom: PreferredSize(
-            // <-- [수정] bottom도 Center 밖, GFAppBar의 속성입니다.
-            // PreferredSize로 감싸기
-            preferredSize: const Size.fromHeight(
-              kToolbarHeight + 25.0,
-            ), // 탭 바 높이 지정
+            preferredSize: const Size.fromHeight(kToolbarHeight + 25.0),
             child: Padding(
-              padding: const EdgeInsets.only(top: 1.0), // 상단 여백 증가
+              padding: const EdgeInsets.only(top: 1.0),
               child: Container(
-                // 탭 바 아래에 구분선 추가
                 decoration: BoxDecoration(
                   border: Border(
                     bottom: BorderSide(color: Colors.grey.shade300, width: 1.0),
@@ -226,36 +234,26 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 child: GFTabBar(
                   length: 2,
                   controller: tabController,
-                  // backgroundColor 삭제
-                  tabBarColor: GFColors.WHITE, // 탭 바 배경 흰색
-                  labelColor: GFColors.PRIMARY, // 활성 탭 텍스트 색상 (Primary)
-                  unselectedLabelColor: Colors.black54, // 비활성 탭 텍스트 색상 (회색)
-                  indicatorColor: GFColors.PRIMARY, // 활성 탭 밑줄 색상 (Primary)
-                  indicatorWeight: 3.0, // 밑줄 두께
+                  tabBarColor: GFColors.WHITE,
+                  labelColor: GFColors.PRIMARY,
+                  unselectedLabelColor: Colors.black54,
+                  indicatorColor: GFColors.PRIMARY,
+                  indicatorWeight: 3.0,
                   tabs: const <Widget>[
-                    Tab(
-                      icon: Icon(Icons.security_outlined), // 아이콘 변경 (선택)
-                      text: "딥페이크 탐지",
-                    ),
-                    Tab(
-                      icon: Icon(Icons.history_outlined), // 아이콘 변경 (선택)
-                      text: "탐지 기록",
-                    ),
+                    Tab(icon: Icon(Icons.security_outlined), text: "딥페이크 탐지"),
+                    Tab(icon: Icon(Icons.history_outlined), text: "탐지 기록"),
                   ],
                 ),
               ),
             ),
           ),
-        ), // <-- GFAppBar 닫기
-        // 탭 뷰 구성 (isLoggedIn 상태 전달)
+        ),
         body: GFTabBarView(
-          // <-- body는 Scaffold의 속성이므로 이 위치가 맞습니다.
           controller: tabController,
-          // 사용자가 스와이프로 탭 전환하는 것을 막으려면 아래 주석 해제
-          // physics: NeverScrollableScrollPhysics(),
           children: <Widget>[
-            DetectionTab(isLoggedIn: isLoggedIn), // 로그인 상태 전달
-            HistoryTab(isLoggedIn: isLoggedIn), // 로그인 상태 전달
+            //DetectionTab(isLoggedIn: isLoggedIn),
+            DetectionTab(isLoggedIn: isLoggedIn, sharedUrl: _sharedText),
+            HistoryTab(isLoggedIn: isLoggedIn),
           ],
         ),
       ),

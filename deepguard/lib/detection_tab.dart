@@ -4,8 +4,13 @@ import 'package:file_picker/file_picker.dart'; // 파일 피커 임포트
 
 class DetectionTab extends StatefulWidget {
   final bool isLoggedIn; // 로그인 상태를 받아옴
+  final String? sharedUrl; // <-- 1. sharedUrl 파라미터 추가
 
-  const DetectionTab({super.key, required this.isLoggedIn});
+  const DetectionTab({
+    super.key,
+    required this.isLoggedIn,
+    this.sharedUrl, // <-- 2. 생성자에 추가
+  });
 
   @override
   State<DetectionTab> createState() => _DetectionTabState();
@@ -15,6 +20,31 @@ class _DetectionTabState extends State<DetectionTab> {
   final TextEditingController _urlController = TextEditingController();
   String? _selectedFilePath;
   bool _isAnalyzing = false; // 분석 진행 상태
+
+  // --- 3. initState 추가 ---
+  @override
+  void initState() {
+    super.initState();
+    // 위젯이 처음 생성될 때 공유된 URL이 있는지 확인
+    if (widget.sharedUrl != null) {
+      _urlController.text = widget.sharedUrl!;
+      print("DetectionTab initialized with shared URL: ${widget.sharedUrl}");
+    }
+  }
+
+  // --- 4. didUpdateWidget 추가 ---
+  @override
+  void didUpdateWidget(covariant DetectionTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 앱이 실행 중일 때 새로운 URL이 공유되었는지 확인
+    if (widget.sharedUrl != oldWidget.sharedUrl && widget.sharedUrl != null) {
+      print("DetectionTab received shared URL update: ${widget.sharedUrl}");
+      setState(() {
+        _urlController.text = widget.sharedUrl!;
+        _selectedFilePath = null; // 파일 선택이 되어있었다면 초기화
+      });
+    }
+  }
 
   // 파일 선택 함수
   Future<void> _pickFile() async {

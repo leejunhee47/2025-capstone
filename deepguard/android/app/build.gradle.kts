@@ -5,18 +5,30 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+import org.gradle.jvm.toolchain.JavaLanguageVersion
+
 android {
     namespace = "com.example.deepguard"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    // ndkVersion = flutter.ndkVersion
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // java {
+    //     toolchain {
+    //         languageVersion.set(JavaLanguageVersion.of(VERSION_1_8))
+    //     }
+    // }
+
     kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_11.toString()
+        //jvmTarget = JavaVersion.VERSION_17.toString()
+        // jvmTarget = JavaVersion.VERSION_1_8.toString()
+        jvmTarget = "17"  
     }
 
     defaultConfig {
@@ -38,6 +50,8 @@ android {
         }
     }
 }
+
+kotlin.jvmToolchain(17)
 
 flutter {
     source = "../.."
