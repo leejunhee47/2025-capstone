@@ -75,9 +75,17 @@ class VideoPreprocessor:
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS)
         duration = total_frames / fps
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
         self.logger.info(f"Video: {Path(video_path).name}")
-        self.logger.info(f"  Duration: {duration:.1f}s, FPS: {fps:.1f}, Frames: {total_frames}")
+        self.logger.info(f"  Resolution: {width}x{height}, Duration: {duration:.1f}s, FPS: {fps:.1f}, Frames: {total_frames}")
+
+        # Detect vertical video (shorts format)
+        is_vertical = height > width
+        if is_vertical:
+            aspect_ratio = height / width
+            self.logger.info(f"  Vertical video detected (aspect ratio: {aspect_ratio:.2f})")
 
         # Check duration
         if duration < self.min_duration:
@@ -95,6 +103,12 @@ class VideoPreprocessor:
 
         # Extract frames
         frames = []
+
+        # Calculate crop dimensions for center-crop (aspect ratio preservation)
+        crop_size = min(width, height)
+        x_offset = (width - crop_size) // 2
+        y_offset = (height - crop_size) // 2
+
         for idx in indices:
             cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
             ret, frame = cap.read()
@@ -103,7 +117,10 @@ class VideoPreprocessor:
                 # Convert BGR to RGB
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-                # Resize
+                # Center-crop to square (prevents aspect ratio distortion)
+                frame = frame[y_offset:y_offset+crop_size, x_offset:x_offset+crop_size]
+
+                # Resize to target size (now square → square)
                 frame = cv2.resize(frame, self.frame_size)
 
                 # Normalize to [0, 1]
