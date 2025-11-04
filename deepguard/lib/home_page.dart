@@ -5,6 +5,7 @@ import 'history_tab.dart'; // 탐지 기록 탭
 import 'package:flutter/services.dart';
 // import 'login_page.dart'; // 로그인 페이지 (실제 구현 시 필요)
 
+import 'http_client.dart';
 import 'dart:async'; // StreamSubscription을 위해 임포트
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
@@ -65,15 +66,39 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 
   // 로그아웃 함수 (예시)
-  void _logout() {
-    setState(() {
-      globalIsLoggedIn = false;
-      globalUserNickname = "";
-    });
-    // TODO: 실제 로그아웃 처리 (예: SharedPreferences 토큰 삭제)
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('로그아웃 되었습니다.')));
+  Future<void> _logout() async {
+    final String url = '$baseUrl/api/v1/auth/logout'; // 로그아웃 API 주소
+
+    try {
+      // [중요] 로그인 시 저장된 세션 쿠키를 전송하기 위해 httpClient 사용
+      final response = await httpClient.post(Uri.parse(url));
+
+      if (response.statusCode == 200) {
+        setState(() {
+          globalIsLoggedIn = false;
+          globalUserNickname = "";
+        });
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('로그아웃 되었습니다.')));
+      } else {
+        // 서버에서 로그아웃 실패
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('로그아웃 실패: ${response.statusCode}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      // 네트워크 오류
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('로그아웃 요청 중 오류 발생: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   // --- 개발용 임시 로그인 토글 함수 ---

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'home_page.dart'; // 메인 화면
 import 'login_page.dart'; // 로그인 화면 (별도 생성 필요)
-// import 'signup_page.dart'; // 회원가입 페이지 (별도 생성 필요)
+import 'signup_page.dart';
 
 void main() {
   // TODO: 앱 시작 시 SharedPreferences 등에서 로그인 정보 불러오기
@@ -25,7 +25,7 @@ class MyApp extends StatelessWidget {
       routes: {
         '/home': (context) => const HomePage(),
         '/login': (context) => const LoginPage(),
-        // '/signup': (context) => const SignupPage(),
+        '/signup': (context) => const SignupPage(),
       },
     );
   }
