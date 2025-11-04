@@ -63,6 +63,12 @@ dependencies {
     // API 호출
     // 주의 : 비동기/논블로킹
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
+
+    // Apache Commons Validator 추가
+    implementation 'commons-validator:commons-validator:1.7'
+
+    // Apache Tika (파일 형식 식별용)
+    implementation 'org.apache.tika:tika-core:2.9.1'
 }
 
 tasks.named('test') {
