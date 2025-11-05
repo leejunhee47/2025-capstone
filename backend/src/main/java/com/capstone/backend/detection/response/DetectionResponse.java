@@ -6,12 +6,13 @@ import lombok.Data;
 public class DetectionResponse {
 
     private Long requestId;
-    private String fileFormat;
-    private String fileSize;
 
-    public DetectionResponse(Long requestId, String fileFormat, String fileSize) {
+
+//    private String fileFormat;
+//    private String fileSize;
+
+
+    public DetectionResponse(Long requestId) {
         this.requestId = requestId;
-        this.fileFormat = fileFormat;
-        this.fileSize = fileSize;
     }
 }
