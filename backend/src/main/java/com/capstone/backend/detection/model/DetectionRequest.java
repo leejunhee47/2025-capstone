@@ -31,18 +31,22 @@ public class DetectionRequest {
     @Column(nullable = false, length = 2048)
     private String callbackUrl;
 
-    @Column(nullable = false)
-    private String originalFilename;
 
-    @Column(nullable = false)
-    private String fileFormat;
+    // 영상 저장 후
 
-    @Column(nullable = false)
-    private Long fileSize;
+//    @Column
+//    private String originalFilename;
+//
+//    @Column
+//    private String fileFormat;
+//
+//    @Column
+//    private Long fileSize;
 
     @Column // S3 저장위치 , 처음엔 null
     private String storedFilePath;
 
+    // --------
 
     @CreationTimestamp
     @Column(updatable = false, nullable = false)
@@ -50,16 +54,9 @@ public class DetectionRequest {
 
 
     @Builder
-    public DetectionRequest(Member member, String callbackUrl, String originalFilename,
-                            String fileFormat, Long fileSize) {
-
-
+    public DetectionRequest(Member member, String callbackUrl) {
         this.member = member;
         this.callbackUrl = callbackUrl;
-        this.originalFilename = originalFilename;
-        this.fileFormat = fileFormat;
-        this.fileSize = fileSize;
-
         this.status = DetectionStatus.PENDING;
     }
 

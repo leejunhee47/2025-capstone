@@ -37,13 +37,22 @@ public class DetectionController {
                                                            @SessionAttribute(value = SessionConst.LOGIN_MEMBER, required = false) Member loginMember){
 
 
+        // 1. 세션 유효성 검사 (가장 먼저 수행)
+        if (loginMember == null) {
+            ErrorResponse errorResponse = new ErrorResponse(
+                    "UNAUTHORIZED",
+                    "로그인이 필요합니다. (세션이 만료되었거나, 로그인하지 않은 사용자입니다.)"
+            );
+            // 401 Unauthorized 상태 코드와 함께 에러 응답 반환
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(errorResponse);
+        }
+
+
         // 1-1. URL 유효성 체크
         if(!isValidCallbackUrl(callbackUrl)){
-            log.warn("유효하지 않은 Callback URL 수신: {}", callbackUrl);
-
             ErrorResponse errorResponse = new ErrorResponse(
-                    "INVALID_CALLBACKURL",
-                    "유효하지 않은 콜백 URL입니다. (http/https 형식이 아니거나, 내부망/localhost 주소일 수 없습니다.)"
+                    "INVALID_CALLBACK_URL",
+                    "유효하지 않은 콜백 URL 입니다. (http/https 형식이 아니거나, 내부망/localhost 주소일 수 없습니다.)"
             );
 
             return ResponseEntity.badRequest().body(errorResponse);
@@ -64,13 +73,9 @@ public class DetectionController {
         // 2. DB 에 요청 저장
         DetectionRequest newRequest;
         try {
-            newRequest = detectionService.saveNewDetectionRequest(
-                    loginMember,
-                    callbackUrl,
-                    file.getOriginalFilename(),
-                    mimeType,
-                    file.getSize()
-            );
+            newRequest = detectionService.saveNewDetectionRequest(loginMember, callbackUrl);
+            // 3. 비동기 처리 시작 (파일 저장 , AI 요청 , DB 수정)
+            detectionService.startDetection(newRequest , file);
         } catch (Exception e) {
             ErrorResponse errorResponse = new ErrorResponse(
                     "SERVER_ERROR",
@@ -81,19 +86,78 @@ public class DetectionController {
                     .body(errorResponse);
         }
 
-        // 3. 비동기 처리 시작 (파일 저장 , AI 요청 , DB 수정)
-        detectionService.startDetection(newRequest , file);
-
         // 사용자에게 즉시 응답
-        DetectionResponse response = new DetectionResponse(
-                newRequest.getRequestId(),
-                mimeType,
-                formatFileSize(file.getSize())
-        );
+        DetectionResponse response = new DetectionResponse(newRequest.getRequestId());
         return ResponseEntity.accepted().body(response);
 
+    }
+
+
+
+
+    @PostMapping("/link")
+    public ResponseEntity<?> processLinkDetectionRequest(@RequestParam("videoUrl") String videoUrl ,
+                                                           @RequestParam("callbackUrl") String callbackUrl ,
+                                                           @SessionAttribute(value = SessionConst.LOGIN_MEMBER, required = false) Member loginMember){
+
+        // 1. 세션 유효성 검사 (가장 먼저 수행)
+        if (loginMember == null) {
+            ErrorResponse errorResponse = new ErrorResponse(
+                    "UNAUTHORIZED",
+                    "로그인이 필요합니다. (세션이 만료되었거나, 로그인하지 않은 사용자입니다.)"
+            );
+            // 401 Unauthorized 상태 코드와 함께 에러 응답 반환
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(errorResponse);
+        }
+
+
+        // 1-1. URL 유효성 체크
+        if(!isValidCallbackUrl(callbackUrl)){
+            ErrorResponse errorResponse = new ErrorResponse(
+                    "INVALID_CALLBACK_URL",
+                    "유효하지 않은 콜백 URL입니다. (http/https 형식이 아니거나, 내부망/localhost 주소일 수 없습니다.)"
+            );
+
+            return ResponseEntity.badRequest().body(errorResponse);
+        }
+
+
+        // 2. DB 에 요청 저장
+        // todo: 유효하지 않은 링크인지 , 서버에러 인지 구별을 못함 (구별하는 것 apk 로 개발해야할듯)
+        DetectionRequest newRequest;
+        try {
+            newRequest = detectionService.saveNewDetectionRequest(loginMember, callbackUrl);
+            // 3. 비동기 처리 시작 (파일 추출 및 저장 , AI 요청 , DB 수정)
+            detectionService.startDetection(newRequest , videoUrl);
+        } catch (Exception e) {
+            ErrorResponse errorResponse = new ErrorResponse(
+                    "SERVER_ERROR",
+                    "서버 에러 입니다."
+            );
+            return ResponseEntity
+                    .status(HttpStatus.INTERNAL_SERVER_ERROR) // 500
+                    .body(errorResponse);
+        }
+
+        // 사용자에게 즉시 응답
+        DetectionResponse response = new DetectionResponse(newRequest.getRequestId());
+        return ResponseEntity.accepted().body(response);
 
     }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
