@@ -7,10 +7,17 @@ import com.capstone.backend.member.model.Member;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.http.MediaType;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.reactive.function.BodyInserters;
+import org.springframework.web.reactive.function.client.WebClient;
+
 import java.io.File;
 import java.util.concurrent.TimeUnit;
 
@@ -19,13 +26,23 @@ import java.util.concurrent.TimeUnit;
 public class DetectionService {
 
     private final DetectionRequestRepository detectionRequestRepository;
+    private final WebClient webClient;
 
     @Value("${file.upload-dir}")
     private String uploadDir;
 
+    @Value("${ai.url.request}")
+    private String aiUrl;
+
+    @Value("${ai.url.response}")
+    private String aiCallbackUrl;
+
+
+
     @Autowired
-    public DetectionService(DetectionRequestRepository detectionRequestRepository) {
+    public DetectionService(DetectionRequestRepository detectionRequestRepository , WebClient webClient) {
         this.detectionRequestRepository = detectionRequestRepository;
+        this.webClient = webClient;
 
     }
 
@@ -49,7 +66,7 @@ public class DetectionService {
 
 
 
-    // 예외처리 작성
+    // todo :  예외처리 작성
 
     @Async
     @Transactional
@@ -72,12 +89,34 @@ public class DetectionService {
             file.transferTo(dest);
 
             // 2. DB 갱신
-            managedRequest.setStoredFilePath(dest.getPath());
+            managedRequest.setVideoPath(dest.getPath());
             managedRequest.setStatus(DetectionStatus.PROCESSING);
             detectionRequestRepository.save(managedRequest);
 
             // 3. AI 서버에 분석 요청
-            // TODO : AI 서버에 분석 요청 로직 작성
+            
+            log.info("AI 서버 분석 요청 시작. Request ID: {}", managedRequest.getRequestId());
+
+            // HTTP 요청 본문(Body) 생성
+            MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+
+            body.add("requestId" , managedRequest.getRequestId()); // 요청 ID
+            body.add("file", new FileSystemResource(dest)); // 파일
+            body.add("callbackUrl", aiCallbackUrl); // 콜백 URL
+
+            webClient.post()
+                    .uri(aiUrl + "/analyze") // AI 서버의 엔드포인트 (예: /analyze, /predict 등)
+                    .contentType(MediaType.MULTIPART_FORM_DATA)
+                    .body(BodyInserters.fromValue(body))
+                    .retrieve() // 응답 받기
+                    .toBodilessEntity() // 응답 본문은 무시 (상태 코드만 확인)
+                    .block(); // @Async 내부이므로 block() 사용 가능
+
+            log.info("AI 서버 분석 요청 성공. Request ID: {}", managedRequest.getRequestId());
+
+
+
+
 
         }catch (Exception e) {
             managedRequest.setStatus(DetectionStatus.FAILED);
@@ -108,6 +147,7 @@ public class DetectionService {
         try {
 
             String outputFilePath = uploadDir + File.separator + managedRequest.getRequestId() + ".mp4";
+            File downloadedFile = new File(outputFilePath);
 
             String[] command = {
                     "yt-dlp",
@@ -139,12 +179,32 @@ public class DetectionService {
 
 
             // 2. DB 갱신
-            managedRequest.setStoredFilePath(outputFilePath);
+            managedRequest.setVideoPath(outputFilePath);
             managedRequest.setStatus(DetectionStatus.PROCESSING);
             detectionRequestRepository.save(managedRequest);
 
             // 3. AI 서버에 분석 요청
-            // TODO : AI 서버에 분석 요청 로직 작성
+
+
+            log.info("AI 서버 분석 요청 시작. Request ID: {}", managedRequest.getRequestId());
+
+            // HTTP 요청 본문(Body) 생성
+            MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+
+            body.add("requestId" , managedRequest.getRequestId()); // 요청 ID
+            body.add("file", new FileSystemResource(downloadedFile)); // 파일
+            body.add("callbackUrl",aiCallbackUrl); // 콜백 URL
+
+            webClient.post()
+                    .uri(aiUrl + "/analyze") // AI 서버의 엔드포인트 (예: /analyze, /predict 등)
+                    .contentType(MediaType.MULTIPART_FORM_DATA)
+                    .body(BodyInserters.fromValue(body))
+                    .retrieve() // 응답 받기
+                    .toBodilessEntity() // 응답 본문은 무시 (상태 코드만 확인)
+                    .block(); // @Async 내부이므로 block() 사용 가능
+
+            log.info("AI 서버 분석 요청 성공. Request ID: {}", managedRequest.getRequestId());
+
 
         } catch (Exception e) {
             Thread.currentThread().interrupt();
@@ -153,6 +213,14 @@ public class DetectionService {
             throw new RuntimeException(managedRequest.getRequestId() +"", e);
         }
     }
+
+
+    @Transactional
+    public void saveResult(){
+
+        // todo : 결과 형식이 결정 되고 , DTO 만든후 작성
+    }
+
 
 
 }

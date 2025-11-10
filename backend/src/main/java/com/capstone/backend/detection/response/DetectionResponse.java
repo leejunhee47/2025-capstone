@@ -8,8 +8,7 @@ public class DetectionResponse {
     private Long requestId;
 
 
-//    private String fileFormat;
-//    private String fileSize;
+
 
 
     public DetectionResponse(Long requestId) {
