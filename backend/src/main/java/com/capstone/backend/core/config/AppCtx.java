@@ -53,12 +53,18 @@ public class AppCtx{
 	}
 
 
+//	@Bean
+//	public WebClient webClient(){
+//		return WebClient.builder()
+//				.baseUrl("https://www.alphavantage.co")
+//				.build();
+//	}
+
 	@Bean
-	public WebClient webClient(){
-		return WebClient.builder()
-				.baseUrl("https://www.alphavantage.co")
-				.build();
+	public WebClient webClient(WebClient.Builder builder){
+		return builder.build();
 	}
+
 }
 
 
