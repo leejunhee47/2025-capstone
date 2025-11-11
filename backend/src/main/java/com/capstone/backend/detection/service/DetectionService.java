@@ -20,25 +20,22 @@ public class DetectionService {
 
     private final DetectionRequestRepository detectionRequestRepository;
 
+    // [유지] /link API가 이 경로를 사용하므로, @Value를 삭제하면 안 됩니다.
     @Value("${file.upload-dir}")
     private String uploadDir;
 
     @Autowired
     public DetectionService(DetectionRequestRepository detectionRequestRepository) {
         this.detectionRequestRepository = detectionRequestRepository;
-
     }
 
     /**
      * 유효성 검사를 통과한 요청을 DB에 'PENDING' 상태로 저장합니다.
-     * @param member 요청을 보낸 사용자
-     * @param callbackUrl 결과를 받을 URL
-     * @return 저장된 DetectionRequest 엔티티
      */
     @Transactional
     public DetectionRequest saveNewDetectionRequest(Member member,
                                                     String callbackUrl){
-
+        // (기존과 동일)
         DetectionRequest newRequest = DetectionRequest.builder()
                 .member(member)
                 .callbackUrl(callbackUrl)
@@ -47,13 +44,13 @@ public class DetectionService {
         return detectionRequestRepository.save(newRequest);
     }
 
-
-
     // 예외처리 작성
 
     @Async
     @Transactional
-    public void startDetection(DetectionRequest request , MultipartFile file) throws IllegalArgumentException{
+    // [수정] 1. "MultipartFile file"을 "String savedFilePath"로 변경
+    // [수정] 2. 메소드 이름 변경 (startDetection -> startFileDetection)
+    public void startFileDetection(DetectionRequest request , String savedFilePath) throws IllegalArgumentException{
 
         DetectionRequest managedRequest = detectionRequestRepository.findById(request.getRequestId())
                 .orElse(null);
@@ -62,24 +59,20 @@ public class DetectionService {
             throw new IllegalArgumentException("DetectionRequest not found with ID: " + request.getRequestId());
         }
 
-
-        // TODO : 파일 경로 수정 필요
-        String uniqueFileName = managedRequest.getRequestId() + "";
-        File dest = new File(uploadDir + uniqueFileName);
-
         try {
-            // 1. 파일 저장
-            file.transferTo(dest);
-
-            // 2. DB 갱신
-            managedRequest.setStoredFilePath(dest.getPath());
+            // [삭제] 파일 저장 로직 (컨트롤러로 이동됨)
+            
+            // 4. DB 갱신
+            managedRequest.setStoredFilePath(savedFilePath);
             managedRequest.setStatus(DetectionStatus.PROCESSING);
             detectionRequestRepository.save(managedRequest);
 
-            // 3. AI 서버에 분석 요청
+            // 5. AI 서버에 분석 요청
             // TODO : AI 서버에 분석 요청 로직 작성
+            // (저장된 파일 경로: savedFilePath 사용)
 
         }catch (Exception e) {
+            log.error("비동기 파일 처리 중 오류 발생 (RequestId: {})", managedRequest.getRequestId(), e);
             managedRequest.setStatus(DetectionStatus.FAILED);
             detectionRequestRepository.save(managedRequest);
             throw new RuntimeException(managedRequest.getRequestId() +"", e);
@@ -89,8 +82,8 @@ public class DetectionService {
 
     @Async
     @Transactional
-    public void startDetection(DetectionRequest request ,  String url) {
-
+    // [수정] 2. 메소드 이름 변경 (startDetection -> startUrlDetection)
+    public void startUrlDetection(DetectionRequest request ,  String url) {
 
         DetectionRequest managedRequest = detectionRequestRepository.findById(request.getRequestId())
                 .orElse(null);
@@ -106,7 +99,6 @@ public class DetectionService {
         }
 
         try {
-
             String outputFilePath = uploadDir + File.separator + managedRequest.getRequestId() + ".mp4";
 
             String[] command = {
@@ -117,7 +109,6 @@ public class DetectionService {
                     "mp4",
                     url
             };
-
 
             ProcessBuilder processBuilder = new ProcessBuilder(command);
             processBuilder.redirectErrorStream(true);
@@ -134,9 +125,9 @@ public class DetectionService {
             if (exitCode != 0) {
                 managedRequest.setStatus(DetectionStatus.FAILED);
                 detectionRequestRepository.save(managedRequest);
+                log.error("yt-dlp process failed (Exit Code: {}) for RequestId: {}", exitCode, request.getRequestId());
                 throw new RuntimeException("yt-dlp process failed with exit code: " + exitCode);
             }
-
 
             // 2. DB 갱신
             managedRequest.setStoredFilePath(outputFilePath);
@@ -147,16 +138,11 @@ public class DetectionService {
             // TODO : AI 서버에 분석 요청 로직 작성
 
         } catch (Exception e) {
-            Thread.currentThread().interrupt();
+            Thread.currentThread().interrupt(); // InterruptedException의 경우 스레드 상태 복원
+            log.error("비동기 URL 처리 중 오류 발생 (RequestId: {})", request.getRequestId(), e);
             managedRequest.setStatus(DetectionStatus.FAILED);
             detectionRequestRepository.save(managedRequest);
-            throw new RuntimeException(managedRequest.getRequestId() +"", e);
+            throw new RuntimeException("Error processing URL for RequestId: " + managedRequest.getRequestId(), e);
         }
     }
-
-
 }
-
-
-
-

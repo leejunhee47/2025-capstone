@@ -3,11 +3,10 @@ import 'package:getwidget/getwidget.dart';
 import 'detection_tab.dart'; // 딥페이크 탐지 탭
 import 'history_tab.dart'; // 탐지 기록 탭
 import 'package:flutter/services.dart';
-// import 'login_page.dart'; // 로그인 페이지 (실제 구현 시 필요)
-
 import 'http_client.dart';
 import 'dart:async'; // StreamSubscription을 위해 임포트
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -70,10 +69,19 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     final String url = '$baseUrl/api/v1/auth/logout'; // 로그아웃 API 주소
 
     try {
-      // [중요] 로그인 시 저장된 세션 쿠키를 전송하기 위해 httpClient 사용
-      final response = await httpClient.post(Uri.parse(url));
+      // 1. [수정] 쿠키 헤더 불러오기
+      final headers = await getAuthHeaders();
+
+      // 2. [수정] post 요청에 헤더 추가
+      final response = await httpClient.post(Uri.parse(url), headers: headers);
 
       if (response.statusCode == 200) {
+        // 2. [수정] SharedPreferences에서 로그인 상태 삭제
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('isLoggedIn');
+        await prefs.remove('userNickname');
+        await prefs.remove('sessionCookie');
+
         setState(() {
           globalIsLoggedIn = false;
           globalUserNickname = "";

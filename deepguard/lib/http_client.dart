@@ -1,22 +1,28 @@
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 // 앱 전역에서 세션 쿠키를 공유하기 위한 단일 클라이언트 인스턴스
-// 모든 API 요청(로그인, 로그아웃, 업로드 등)은 반드시 이 클라이언트를 사용해야 합니다.
 final http.Client httpClient = http.Client();
 
 // 백엔드 서버 주소 (본인의 로컬 환경에 맞게 수정)
-
-// -----------------------------------------------------
-// 1. Android 에뮬레이터를 사용할 경우 (대부분 이 경우)
-// -----------------------------------------------------
-// 에뮬레이터에서 'localhost'는 에뮬레이터 자신을 의미하므로,
-// PC(호스트)에 접속하려면 10.0.2.2 특수 IP를 사용해야 합니다.
 const String baseUrl = "http://220.127.129.63:8080";
+//const String baseUrl = "https://untauntingly-impuissant-amada.ngrok-free.dev";
 
-// -----------------------------------------------------
-// 2. 실물 폰을 Wi-Fi로 연결해 테스트할 경우
-// -----------------------------------------------------
-// PC와 폰이 동일한 Wi-Fi에 연결되어 있어야 합니다.
-// PC의 IP 주소(예: 192.168.0.5)를 확인하고 입력하세요.
-// const String baseUrl = "http://192.168.0.5:8080";
-// -----------------------------------------------------
+// 2. [신규] 쿠키가 포함된 헤더를 반환하는 헬퍼 함수
+Future<Map<String, String>> getAuthHeaders({bool isJson = false}) async {
+  final prefs = await SharedPreferences.getInstance();
+  final String? cookie = prefs.getString('sessionCookie');
+
+  final headers = <String, String>{};
+
+  // 3. JSON 요청인지 여부에 따라 Content-Type 설정
+  if (isJson) {
+    headers['Content-Type'] = 'application/json; charset=UTF-8';
+  }
+
+  // 4. 저장된 쿠키가 있으면 헤더에 추가
+  if (cookie != null) {
+    headers['Cookie'] = cookie;
+  }
+  return headers;
+}

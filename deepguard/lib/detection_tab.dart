@@ -1,16 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:getwidget/getwidget.dart';
-import 'package:file_picker/file_picker.dart'; // 파일 피커 임포트
+import 'package:file_picker/file_picker.dart';
+import 'package:http/http.dart' as http; // 1. http 패키지 임포트
+import 'dart:convert'; // 2. json 및 utf8 임포트
+import 'http_client.dart'; // 3. 공유 클라이언트 (세션 유지용) 임포트
 
 class DetectionTab extends StatefulWidget {
-  final bool isLoggedIn; // 로그인 상태를 받아옴
-  final String? sharedUrl; // <-- 1. sharedUrl 파라미터 추가
+  final bool isLoggedIn;
+  final String? sharedUrl;
 
-  const DetectionTab({
-    super.key,
-    required this.isLoggedIn,
-    this.sharedUrl, // <-- 2. 생성자에 추가
-  });
+  const DetectionTab({super.key, required this.isLoggedIn, this.sharedUrl});
 
   @override
   State<DetectionTab> createState() => _DetectionTabState();
@@ -21,60 +20,58 @@ class _DetectionTabState extends State<DetectionTab> {
   String? _selectedFilePath;
   bool _isAnalyzing = false; // 분석 진행 상태
 
-  // --- 3. initState 추가 ---
   @override
   void initState() {
     super.initState();
-    // 위젯이 처음 생성될 때 공유된 URL이 있는지 확인
     if (widget.sharedUrl != null) {
       _urlController.text = widget.sharedUrl!;
-      print("DetectionTab initialized with shared URL: ${widget.sharedUrl}");
     }
   }
 
-  // --- 4. didUpdateWidget 추가 ---
   @override
   void didUpdateWidget(covariant DetectionTab oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 앱이 실행 중일 때 새로운 URL이 공유되었는지 확인
     if (widget.sharedUrl != oldWidget.sharedUrl && widget.sharedUrl != null) {
-      print("DetectionTab received shared URL update: ${widget.sharedUrl}");
       setState(() {
         _urlController.text = widget.sharedUrl!;
-        _selectedFilePath = null; // 파일 선택이 되어있었다면 초기화
+        _selectedFilePath = null;
       });
     }
   }
 
-  // 파일 선택 함수
   Future<void> _pickFile() async {
     try {
       FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.video, // 비디오 파일만 선택하도록 제한
+        type: FileType.video,
       );
 
       if (result != null) {
         setState(() {
           _selectedFilePath = result.files.single.path;
-          _urlController.clear(); // 파일 선택 시 URL 입력 초기화
+          _urlController.clear();
         });
-        print('선택된 파일: $_selectedFilePath');
-      } else {
-        // 사용자가 선택 취소
-        print('파일 선택이 취소되었습니다.');
       }
     } catch (e) {
-      print('파일 선택 오류: $e');
-      // 오류 메시지 표시 (예: SnackBar)
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('파일 선택 중 오류 발생: $e')));
     }
   }
 
-  // 분석 시작 함수 (서버 전송 로직 필요)
+  // [수정됨] 분석 시작 함수 (새로운 백엔드 API 연동 완료)
   void _startAnalysis() async {
-    if (_isAnalyzing) return; // 이미 분석 중이면 중복 실행 방지
+    if (_isAnalyzing) return; // 중복 실행 방지
+
+    // API가 세션을 확인하므로 로그인 상태를 먼저 체크합니다.
+    if (!widget.isLoggedIn) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('로그인이 필요합니다.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
 
     final url = _urlController.text;
     final filePath = _selectedFilePath;
@@ -90,28 +87,125 @@ class _DetectionTabState extends State<DetectionTab> {
       _isAnalyzing = true; // 분석 시작 상태
     });
 
+    // [중요] 테스트용 Callback URL
+    // 서버의 SSRF 방지 로직 [cite: 40-51] 때문에 localhost, 192.168... 등은 차단됩니다.
+    // https://webhook.site/ 에서 본인의 고유 주소를 발급받아 사용하세요.
+    const String tempCallbackUrl =
+        "https://webhook.site/8d6449dc-bffb-4265-89e1-6a2f6eff554f";
+
     try {
-      // --- 서버 전송 로직 ---
+      // --- 1. URL 전송 로직 (/link API 호출) ---
       if (url.isNotEmpty) {
         print('URL 전송 시작: $url');
-        // TODO: http 패키지 등을 사용하여 서버로 URL 전송 및 결과 대기
-        await Future.delayed(const Duration(seconds: 3)); // 임시 지연
+
+        // 1. [수정] 쿠키 헤더 불러오기
+        final headers = await getAuthHeaders();
+
+        // [수정] 백엔드가 @RequestParam [cite: 21]으로 받으므로, JSON이 아닌 Map(form-urlencoded)으로 전송
+        final response = await httpClient.post(
+          Uri.parse('$baseUrl/api/v1/detection/link'),
+          headers: headers,
+          body: {'videoUrl': url, 'callbackUrl': tempCallbackUrl},
+        );
+
+        final responseBody = json.decode(utf8.decode(response.bodyBytes));
+
+        if (response.statusCode == 202) {
+          // 202 Accepted
+          // [수정] 응답이 requestId만 포함
+          final String requestId = responseBody['requestId'].toString();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('URL 분석 요청 성공! (ID: $requestId)'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else if (response.statusCode == 401) {
+          // [신규] 세션 만료 처리 [cite: 22-25]
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                responseBody['message'] ?? '로그인이 만료되었습니다. 다시 로그인해주세요.',
+              ),
+              backgroundColor: Colors.red,
+            ),
+          );
+        } else {
+          // 400 (유효하지 않은 URL) 또는 500 (서버 에러) 등
+          final String errorMessage = responseBody['message'] ?? '알 수 없는 오류';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('URL 요청 실패: $errorMessage'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+
+        // --- 2. 파일 전송 로직 (/upload API 호출) ---
       } else if (filePath != null) {
         print('파일 전송 시작: $filePath');
-        // TODO: http 패키지 등을 사용하여 서버로 파일 전송 및 결과 대기
-        await Future.delayed(const Duration(seconds: 5)); // 임시 지연
+
+        // [유지] 파일이 포함된 요청은 MultipartRequest를 사용합니다.
+        final request = http.MultipartRequest(
+          'POST',
+          Uri.parse('$baseUrl/api/v1/detection/upload'),
+        );
+
+        // API가 요구하는 두 파라미터
+        request.fields['callbackUrl'] = tempCallbackUrl;
+        request.files.add(
+          await http.MultipartFile.fromPath(
+            'file', // @RequestParam("file") [cite: 5]
+            filePath,
+          ),
+        );
+
+        // 3. [수정] 쿠키 헤더 불러오기
+        final headers = await getAuthHeaders();
+        // 4. [수정] MultipartRequest에 헤더 추가
+        request.headers.addAll(headers);
+
+        // [중요] 세션 유지를 위해 공유 httpClient로 전송
+        final streamedResponse = await httpClient.send(request);
+        final response = await http.Response.fromStream(streamedResponse);
+        final responseBody = json.decode(utf8.decode(response.bodyBytes));
+
+        if (response.statusCode == 202) {
+          // 202 Accepted
+          // [수정] 응답이 requestId만 포함
+          final String requestId = responseBody['requestId'].toString();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('파일 분석 요청 성공! (ID: $requestId)'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else if (response.statusCode == 401) {
+          // [신규] 세션 만료 처리 [cite: 6-9]
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                responseBody['message'] ?? '로그인이 만료되었습니다. 다시 로그인해주세요.',
+              ),
+              backgroundColor: Colors.red,
+            ),
+          );
+        } else {
+          // 400 (유효하지 않은 파일) 또는 500 (서버 에러) 등
+          final String errorMessage = responseBody['message'] ?? '알 수 없는 오류';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('파일 업로드 실패: $errorMessage'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
       }
-      // --- 분석 완료 ---
-      print('분석 완료!');
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('분석이 완료되었습니다.')));
-      // TODO: 분석 결과 화면으로 이동 또는 결과 표시 로직
     } catch (e) {
       print('분석 요청 오류: $e');
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('분석 요청 중 오류 발생: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('서버 통신 오류: $e'), backgroundColor: Colors.red),
+      );
     } finally {
       setState(() {
         _isAnalyzing = false; // 분석 종료 상태
@@ -124,7 +218,7 @@ class _DetectionTabState extends State<DetectionTab> {
   @override
   Widget build(BuildContext context) {
     if (!widget.isLoggedIn) {
-      // 로그인 안된 경우
+      // (기존 코드와 동일 - 로그인 안된 경우)
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -149,14 +243,12 @@ class _DetectionTabState extends State<DetectionTab> {
         ),
       );
     } else {
-      // 로그인 된 경우
+      // (기존 코드와 동일 - 로그인 된 경우)
       return SingleChildScrollView(
-        // 키보드 올라올 때 오버플로우 방지
         padding: const EdgeInsets.all(20.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 참고 이미지와 유사한 상단 디자인 (선택 사항)
             Center(
               child: GFAvatar(
                 size: GFSize.LARGE * 1.5,
@@ -188,7 +280,6 @@ class _DetectionTabState extends State<DetectionTab> {
                 hintText: '영상 URL을 입력하세요 (예: https://...)',
                 border: const OutlineInputBorder(),
                 suffixIcon: IconButton(
-                  // 입력 내용 지우기 버튼
                   icon: const Icon(Icons.clear),
                   onPressed: () {
                     _urlController.clear();
@@ -199,7 +290,6 @@ class _DetectionTabState extends State<DetectionTab> {
                 ),
               ),
               keyboardType: TextInputType.url,
-              // URL 입력 시 파일 선택 해제
               onChanged: (value) {
                 if (value.isNotEmpty) {
                   setState(() {
@@ -221,9 +311,9 @@ class _DetectionTabState extends State<DetectionTab> {
               text: _selectedFilePath == null ? "동영상 파일 선택" : "다른 파일 선택",
               icon: const Icon(Icons.upload_file, color: Colors.white),
               type: GFButtonType.outline2x,
-              blockButton: true, // 버튼 너비 최대로
+              blockButton: true,
             ),
-            if (_selectedFilePath != null) // 선택된 파일 경로 표시
+            if (_selectedFilePath != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8.0),
                 child: Text(
@@ -237,7 +327,7 @@ class _DetectionTabState extends State<DetectionTab> {
 
             // 탐지 시작 버튼
             _isAnalyzing
-                ? const Center(child: CircularProgressIndicator()) // 분석 중 로딩 표시
+                ? const Center(child: CircularProgressIndicator())
                 : GFButton(
                     onPressed: _startAnalysis,
                     text: "탐지 시작",

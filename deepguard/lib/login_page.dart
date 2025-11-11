@@ -3,6 +3,7 @@ import 'package:getwidget/getwidget.dart';
 import 'home_page.dart'; // 상태 변수 사용을 위해 임포트
 import 'http_client.dart'; // <-- 1단계에서 만든 공유 클라이언트
 import 'dart:convert'; // JSON 인코딩/디코딩
+import 'package:shared_preferences/shared_preferences.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -55,6 +56,18 @@ class _LoginPageState extends State<LoginPage> {
       if (response.statusCode == 200) {
         // 로그인 성공
         final String nickname = responseBody['name']; // 서버에서 'name' 필드
+
+        // 2. [수정] 세션 쿠키 추출
+        final String? rawCookie = response.headers['set-cookie'];
+
+        // 3. SharedPreferences에 로그인 상태 및 쿠키 저장
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('isLoggedIn', true);
+        await prefs.setString('userNickname', nickname);
+        if (rawCookie != null) {
+          // JSESSIONID만 깔끔하게 저장
+          await prefs.setString('sessionCookie', rawCookie.split(';')[0]);
+        }
 
         // [중요] 세션 쿠키가 httpClient에 자동으로 저장되었습니다.
 
