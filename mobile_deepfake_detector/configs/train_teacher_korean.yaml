@@ -8,16 +8,23 @@ experiment:
   num_gpus: 1
 
 # Model Architecture
+# NOTE: visual_dim=256, lip_dim=128 are hardcoded in train.py (from feature extractors)
+# These dimensions come from the preprocessing pipeline and cannot be changed via config
 model:
   name: "MMMS_BA"
 
   # GRU Configuration
   gru:
-    hidden_size: 300  # Bi-directional: 300*2 = 600
+    hidden_size: 300  # GRU hidden dimension (bi-directional output: 300*2 = 600)
     num_layers: 1
     dropout: 0.5
     recurrent_dropout: 0.5
     bidirectional: true
+
+  # Input Dimensions (Hardcoded in train.py - for reference only)
+  # audio_dim: 40 (MFCC coefficients from config below)
+  # visual_dim: 256 (from ResNet feature extractor)
+  # lip_dim: 128 (from lip ROI feature extractor)
 
   # Dense Layer
   dense:
@@ -36,7 +43,7 @@ model:
 # Dataset
 dataset:
   name: "Korean_Deepfake"
-  root_dir: "E:/capstone/preprocessed_data_real"  # 실제 한국어 데이터셋 (975개)
+  root_dir: "E:/capstone/preprocessed_data_phoneme"  # 음소 라벨 포함 데이터셋
 
   # Modalities
   modalities:
@@ -61,7 +68,7 @@ dataset:
 
   # Lip Region
   lip:
-    size: [96, 96]
+    size: [112, 112]
     detector: "haar_cascade"  # haar_cascade | dlib
 
   # Split
@@ -123,12 +130,12 @@ training:
 
   # Training Settings
   epochs: 15  # 테스트용 (원래: 15)
-  batch_size: 2  # 메모리 안전을 위해 최소화
+  batch_size: 8  # 증가: 안정적인 gradient 업데이트
   num_workers: 0  # Windows 메모리 에러 방지
 
   # ⚡ 병렬 학습 최적화
   use_prefetch: false  # 메모리 안정성 우선
-  gradient_accumulation_steps: 4  # Effective batch size: 8 유지
+  gradient_accumulation_steps: 1  # Batch size 증가로 인해 감소
   use_compile: false  # 메모리 절약
 
   # Gradient Clipping
@@ -145,7 +152,8 @@ training:
     save_last: true
     monitor: "val_acc"
     mode: "max"
-    save_dir: "models/checkpoints/korean"
+    save_dir: "models/checkpoints"
+    prefix: "mmms-ba_"
 
   # Early Stopping
   early_stopping:
@@ -154,10 +162,10 @@ training:
     monitor: "val_loss"
     mode: "min"
 
-  # Class Imbalance Handling
-  use_weighted_sampler: true  # WeightedRandomSampler 사용
-  use_weighted_loss: true     # Weighted CrossEntropyLoss 사용
-  class_weights: [5.0, 1.0]   # [Real, Fake] - Real에 5배 가중치
+  # Class Imbalance Handling (PIA 방식: 균형 조정 없이 단순 학습)
+  use_weighted_sampler: false  # PIA처럼 사용 안 함
+  use_weighted_loss: false     # PIA처럼 사용 안 함
+  # class_weights: [5.0, 1.0]  # 사용 안 함
 
   # Logging
   logging:
@@ -182,8 +190,9 @@ metrics:
 
 # Paths
 paths:
-  data_dir: "E:/capstone/preprocessed_data_real"
+  data_dir: "E:/capstone/preprocessed_data_phoneme"
   model_dir: "models"
-  log_dir: "logs/korean"
-  output_dir: "outputs/korean"
+  log_dir: "logs"
+  log_file: "mmms-ba_train.log"
+  output_dir: "outputs/mmms-ba"
 
