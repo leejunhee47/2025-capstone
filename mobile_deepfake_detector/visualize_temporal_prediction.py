@@ -53,8 +53,8 @@ def visualize_temporal_prediction(
     print("TEMPORAL DEEPFAKE VISUALIZATION")
     print("="*80)
 
-    # Device (use CPU for large videos to avoid OOM)
-    device = torch.device('cpu')  # Force CPU to handle large videos
+    # Device (use CUDA for faster inference)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Load config
     config = load_config(config_path)
@@ -108,23 +108,121 @@ def visualize_temporal_prediction(
     # 3. Get frame-level predictions
     print("\n[3/4] Running frame-level prediction...")
 
-    # Prepare tensors
-    frames_torch = torch.from_numpy(frames_np).permute(0, 3, 1, 2).unsqueeze(0).to(device).float()
-    audio_torch = torch.from_numpy(audio_np).unsqueeze(0).to(device).float()
-    lip_torch = torch.from_numpy(lip_np).permute(0, 3, 1, 2).unsqueeze(0).to(device).float()
+    # For large videos (>1000 frames), use batched feature extraction
+    if total_frames > 1000:
+        print(f"  Large video detected ({total_frames} frames), using batched feature extraction...")
+        model = model.to('cpu')
+        device = torch.device('cpu')
 
-    with torch.no_grad():
-        frame_logits = model(
-            audio=audio_torch,
-            frames=frames_torch,
-            lip=lip_torch,
-            frame_level=True  # Frame-level prediction
-        )
+        # Extract features in batches to avoid OOM
+        batch_size = 500
+        all_visual_features = []
+        all_lip_features = []
 
-    frame_probs = torch.softmax(frame_logits, dim=-1)  # (1, T, 2)
-    fake_probs = frame_probs[0, :, 1].cpu().numpy()  # (T,)
+        for start_idx in range(0, total_frames, batch_size):
+            end_idx = min(start_idx + batch_size, total_frames)
+            print(f"    Processing frames {start_idx}-{end_idx}/{total_frames}...")
 
-    print(f"  Frame predictions: {frame_logits.shape}")
+            # Prepare batch
+            frames_batch = torch.from_numpy(frames_np[start_idx:end_idx]).permute(0, 3, 1, 2).unsqueeze(0).to(device).float()
+            lip_batch = torch.from_numpy(lip_np[start_idx:end_idx]).permute(0, 3, 1, 2).unsqueeze(0).to(device).float()
+
+            with torch.no_grad():
+                # Extract features (CNN processing, memory intensive)
+                visual_feats = model.extract_visual_features(frames_batch)  # (1, batch_size, visual_dim)
+                lip_feats = model.extract_lip_features(lip_batch)  # (1, batch_size, lip_dim)
+
+                all_visual_features.append(visual_feats.cpu())
+                all_lip_features.append(lip_feats.cpu())
+
+        # Concatenate all features
+        visual_features = torch.cat(all_visual_features, dim=1).to(device)  # (1, T, visual_dim)
+        lip_features = torch.cat(all_lip_features, dim=1).to(device)  # (1, T, lip_dim)
+        audio_torch = torch.from_numpy(audio_np).unsqueeze(0).to(device).float()
+
+        # Run the rest of the model (GRU + attention + classification)
+        print(f"    Running temporal modeling (GRU + Attention)...")
+        with torch.no_grad():
+            # Create masks
+            frames_mask = torch.ones(1, total_frames, dtype=torch.bool, device=device)
+            audio_mask = torch.ones(1, audio_torch.size(1), dtype=torch.bool, device=device)
+
+            # GRU Encoding
+            audio_encoded = model.audio_encoder(audio_torch, audio_mask)  # (1, T_audio, gru_dim*2)
+            visual_encoded = model.visual_encoder(visual_features, frames_mask)  # (1, T, gru_dim*2)
+            lip_encoded = model.lip_encoder(lip_features, frames_mask)  # (1, T, gru_dim*2)
+
+            # Dense projection
+            audio_dense = model.audio_dense(audio_encoded)
+            visual_dense = model.visual_dense(visual_encoded)
+            lip_dense = model.lip_dense(lip_encoded)
+
+            # Attention
+            vl_att = model.attention_vl(visual_dense, lip_dense, frames_mask, frames_mask)
+            av_att = model.attention_av(audio_dense, visual_dense, audio_mask, frames_mask)
+            la_att = model.attention_la(lip_dense, audio_dense, frames_mask, audio_mask)
+
+            # Interpolate audio features to match frame length
+            T_frames = visual_dense.size(1)
+            T_audio = audio_dense.size(1)
+
+            if T_audio != T_frames:
+                audio_dense_interp = torch.nn.functional.interpolate(
+                    audio_dense.transpose(1, 2),  # (1, D, T_audio)
+                    size=T_frames,
+                    mode='linear',
+                    align_corners=False
+                ).transpose(1, 2)  # (1, T_frames, D)
+
+                av_att_interp = torch.nn.functional.interpolate(
+                    av_att.transpose(1, 2),  # (1, D, T_audio)
+                    size=T_frames,
+                    mode='linear',
+                    align_corners=False
+                ).transpose(1, 2)  # (1, T_frames, D)
+
+                la_att_interp = torch.nn.functional.interpolate(
+                    la_att.transpose(1, 2),  # (1, D, T_audio)
+                    size=T_frames,
+                    mode='linear',
+                    align_corners=False
+                ).transpose(1, 2)  # (1, T_frames, D)
+            else:
+                audio_dense_interp = audio_dense
+                av_att_interp = av_att
+                la_att_interp = la_att
+
+            # Concatenate all features
+            combined = torch.cat([
+                visual_dense, lip_dense, audio_dense_interp,
+                vl_att, av_att_interp, la_att_interp
+            ], dim=-1)  # (1, T_frames, dense_dim*6)
+
+            # Classification
+            frame_logits = model.classifier(combined)  # (1, T_frames, num_classes)
+
+        frame_probs = torch.softmax(frame_logits, dim=-1)  # (1, T, 2)
+        fake_probs = frame_probs[0, :, 1].cpu().numpy()  # (T,)
+
+    else:
+        # Small video: process normally
+        # Prepare tensors (audio already aligned to frames by MMSBAdapter)
+        frames_torch = torch.from_numpy(frames_np).permute(0, 3, 1, 2).unsqueeze(0).to(device).float()
+        audio_torch = torch.from_numpy(audio_np).unsqueeze(0).to(device).float()
+        lip_torch = torch.from_numpy(lip_np).permute(0, 3, 1, 2).unsqueeze(0).to(device).float()
+
+        with torch.no_grad():
+            frame_logits = model(
+                audio=audio_torch,
+                frames=frames_torch,
+                lip=lip_torch,
+                frame_level=True  # Frame-level prediction
+            )
+
+        frame_probs = torch.softmax(frame_logits, dim=-1)  # (1, T, 2)
+        fake_probs = frame_probs[0, :, 1].cpu().numpy()  # (T,)
+
+    print(f"  Total frames processed: {len(fake_probs)}")
     print(f"  Mean fake prob: {fake_probs.mean():.3f}")
     print(f"  Max fake prob: {fake_probs.max():.3f}")
     print(f"  Min fake prob: {fake_probs.min():.3f}")
@@ -283,20 +381,23 @@ def visualize_temporal_prediction(
 
 
 if __name__ == "__main__":
-    # Configuration
-    npz_path = "E:/capstone/preprocessed_data_phoneme/test/00000.npz"
-    original_video_root = "E:/capstone/real_deepfake_dataset/003.딥페이크/1.Training/원천데이터"
-    output_path = "E:/capstone/mobile_deepfake_detector/temporal_visualization_00000.png"
+    import argparse
 
-    # Use trained model (97.74% Val Acc at Epoch 1)
-    model_path = "E:/capstone/mobile_deepfake_detector/models/checkpoints/mmms-ba_best.pth"
-    config_path = "E:/capstone/mobile_deepfake_detector/configs/train_teacher_korean.yaml"
+    parser = argparse.ArgumentParser(description="Temporal Deepfake Visualization")
+    parser.add_argument("--npz_path", type=str, required=True, help="Path to NPZ file")
+    parser.add_argument("--video_root", type=str, required=True, help="Original video root directory")
+    parser.add_argument("--model_path", type=str, default=None, help="Trained model checkpoint path")
+    parser.add_argument("--config_path", type=str, default="configs/train_teacher_korean.yaml", help="Config YAML path")
+    parser.add_argument("--output_path", type=str, default="temporal_visualization.png", help="Output image path")
+    parser.add_argument("--num_sample_frames", type=int, default=6, help="Number of sample frames to display")
+
+    args = parser.parse_args()
 
     visualize_temporal_prediction(
-        npz_path=npz_path,
-        original_video_root=original_video_root,
-        model_path=model_path if Path(model_path).exists() else None,
-        config_path=config_path,
-        output_path=output_path,
-        num_sample_frames=6
+        npz_path=args.npz_path,
+        original_video_root=args.video_root,
+        model_path=args.model_path if args.model_path and Path(args.model_path).exists() else None,
+        config_path=args.config_path,
+        output_path=args.output_path,
+        num_sample_frames=args.num_sample_frames
     )

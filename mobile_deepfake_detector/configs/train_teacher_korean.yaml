@@ -153,7 +153,7 @@ training:
     monitor: "val_acc"
     mode: "max"
     save_dir: "models/checkpoints"
-    prefix: "mmms-ba_"
+    prefix: "mmms-ba_"  # K-Fold: mmms-ba_best.pth, 일반: mmms-ba_best_balanced.pth (weighted sampler/loss 적용)
 
   # Early Stopping
   early_stopping:
@@ -162,10 +162,13 @@ training:
     monitor: "val_loss"
     mode: "min"
 
-  # Class Imbalance Handling (PIA 방식: 균형 조정 없이 단순 학습)
-  use_weighted_sampler: false  # PIA처럼 사용 안 함
-  use_weighted_loss: false     # PIA처럼 사용 안 함
-  # class_weights: [5.0, 1.0]  # 사용 안 함
+  # Class Imbalance Handling (False Positive 편향 해결)
+  # REAL 34.6% vs FAKE 65.4% 불균형을 해결하기 위해 두 가지 방법 동시 적용:
+  # 1. Weighted Sampler: REAL 샘플을 학습 중 더 자주 선택 (오버샘플링)
+  # 2. Weighted Loss: REAL 샘플의 loss에 더 높은 가중치 부여
+  use_weighted_sampler: true   # Oversampling으로 REAL 샘플 빈도 증가
+  use_weighted_loss: true      # REAL 오분류 시 loss 증폭
+  class_weights: [2.0, 1.0]    # [Real, Fake] - REAL 가중치 2배 (34.6% → 50% 효과)
 
   # Logging
   logging:

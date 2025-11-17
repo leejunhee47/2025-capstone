@@ -323,7 +323,8 @@ class MMMSBA(nn.Module):
         frames: torch.Tensor,
         lip: torch.Tensor,
         audio_mask: torch.Tensor = None,
-        frames_mask: torch.Tensor = None
+        frames_mask: torch.Tensor = None,
+        frame_level: bool = False
     ) -> torch.Tensor:
         """
         Forward pass
@@ -334,9 +335,13 @@ class MMMSBA(nn.Module):
             lip: Lip frames (B, T_lip, 3, lip_H, lip_W)
             audio_mask: Audio mask (B, T_audio)
             frames_mask: Frames mask (B, T_frames)
+            frame_level: If True, return frame-level predictions (B, T, num_classes)
+                        If False, return video-level prediction (B, num_classes)
 
         Returns:
-            logits: Classification logits (B, num_classes)
+            logits: Classification logits
+                - (B, num_classes) if frame_level=False
+                - (B, T_frames, num_classes) if frame_level=True
         """
         # === Extract Features ===
         visual_features = self.extract_visual_features(frames)  # (B, T, visual_dim)
@@ -363,51 +368,128 @@ class MMMSBA(nn.Module):
             # Lip-Audio attention
             la_att = self.attention_la(lip_dense, audio_dense, frames_mask, audio_mask)
 
-            # Concatenate: attended features + original features
-            # We need to aggregate over time dimension
-            # Use masked mean pooling
-            vl_pooled = self._masked_pool(vl_att, frames_mask)
-            av_pooled = self._masked_pool(av_att, audio_mask)
-            la_pooled = self._masked_pool(la_att, frames_mask)
+            if frame_level:
+                # Frame-level prediction: Keep temporal dimension
+                # Interpolate audio features to match frame length
+                T_frames = visual_dense.size(1)
+                T_audio = audio_dense.size(1)
 
-            audio_pooled = self._masked_pool(audio_dense, audio_mask)
-            visual_pooled = self._masked_pool(visual_dense, frames_mask)
-            lip_pooled = self._masked_pool(lip_dense, frames_mask)
+                if T_audio != T_frames:
+                    # Interpolate audio and audio-related features to T_frames
+                    audio_dense_interp = F.interpolate(
+                        audio_dense.transpose(1, 2),  # (B, D, T_audio)
+                        size=T_frames,
+                        mode='linear',
+                        align_corners=False
+                    ).transpose(1, 2)  # (B, T_frames, D)
 
-            merged = torch.cat([
-                vl_pooled, av_pooled, la_pooled,
-                audio_pooled, visual_pooled, lip_pooled
-            ], dim=-1)
+                    av_att_interp = F.interpolate(
+                        av_att.transpose(1, 2),  # (B, D, T_audio)
+                        size=T_frames,
+                        mode='linear',
+                        align_corners=False
+                    ).transpose(1, 2)  # (B, T_frames, D)
+
+                    la_att_interp = la_att  # Already at T_frames
+                else:
+                    audio_dense_interp = audio_dense
+                    av_att_interp = av_att
+                    la_att_interp = la_att
+
+                # Concatenate along feature dimension (keep time dimension)
+                merged = torch.cat([
+                    vl_att, av_att_interp, la_att_interp,
+                    audio_dense_interp, visual_dense, lip_dense
+                ], dim=-1)  # (B, T_frames, 9*dense_dim)
+
+            else:
+                # Video-level prediction: Pool over time
+                vl_pooled = self._masked_pool(vl_att, frames_mask)
+                av_pooled = self._masked_pool(av_att, audio_mask)
+                la_pooled = self._masked_pool(la_att, frames_mask)
+
+                audio_pooled = self._masked_pool(audio_dense, audio_mask)
+                visual_pooled = self._masked_pool(visual_dense, frames_mask)
+                lip_pooled = self._masked_pool(lip_dense, frames_mask)
+
+                merged = torch.cat([
+                    vl_pooled, av_pooled, la_pooled,
+                    audio_pooled, visual_pooled, lip_pooled
+                ], dim=-1)  # (B, 9*dense_dim)
 
         elif self.attention_type == "self":
             audio_att = self.attention_audio(audio_dense, audio_mask)
             visual_att = self.attention_visual(visual_dense, frames_mask)
             lip_att = self.attention_lip(lip_dense, frames_mask)
 
-            # Pool
-            audio_att_pooled = self._masked_pool(audio_att, audio_mask)
-            visual_att_pooled = self._masked_pool(visual_att, frames_mask)
-            lip_att_pooled = self._masked_pool(lip_att, frames_mask)
+            if frame_level:
+                # Frame-level: Keep temporal dimension
+                T_frames = visual_dense.size(1)
+                T_audio = audio_dense.size(1)
 
-            audio_pooled = self._masked_pool(audio_dense, audio_mask)
-            visual_pooled = self._masked_pool(visual_dense, frames_mask)
-            lip_pooled = self._masked_pool(lip_dense, frames_mask)
+                if T_audio != T_frames:
+                    audio_att_interp = F.interpolate(
+                        audio_att.transpose(1, 2), size=T_frames, mode='linear', align_corners=False
+                    ).transpose(1, 2)
+                    audio_dense_interp = F.interpolate(
+                        audio_dense.transpose(1, 2), size=T_frames, mode='linear', align_corners=False
+                    ).transpose(1, 2)
+                else:
+                    audio_att_interp = audio_att
+                    audio_dense_interp = audio_dense
 
-            merged = torch.cat([
-                audio_att_pooled, visual_att_pooled, lip_att_pooled,
-                audio_pooled, visual_pooled, lip_pooled
-            ], dim=-1)
+                merged = torch.cat([
+                    audio_att_interp, visual_att, lip_att,
+                    audio_dense_interp, visual_dense, lip_dense
+                ], dim=-1)  # (B, T_frames, 6*dense_dim)
+
+            else:
+                # Video-level: Pool
+                audio_att_pooled = self._masked_pool(audio_att, audio_mask)
+                visual_att_pooled = self._masked_pool(visual_att, frames_mask)
+                lip_att_pooled = self._masked_pool(lip_att, frames_mask)
+
+                audio_pooled = self._masked_pool(audio_dense, audio_mask)
+                visual_pooled = self._masked_pool(visual_dense, frames_mask)
+                lip_pooled = self._masked_pool(lip_dense, frames_mask)
+
+                merged = torch.cat([
+                    audio_att_pooled, visual_att_pooled, lip_att_pooled,
+                    audio_pooled, visual_pooled, lip_pooled
+                ], dim=-1)  # (B, 6*dense_dim)
 
         else:  # none
-            # Just pool and concatenate
-            audio_pooled = self._masked_pool(audio_dense, audio_mask)
-            visual_pooled = self._masked_pool(visual_dense, frames_mask)
-            lip_pooled = self._masked_pool(lip_dense, frames_mask)
+            if frame_level:
+                # Frame-level: Keep temporal dimension
+                T_frames = visual_dense.size(1)
+                T_audio = audio_dense.size(1)
 
-            merged = torch.cat([audio_pooled, visual_pooled, lip_pooled], dim=-1)
+                if T_audio != T_frames:
+                    audio_dense_interp = F.interpolate(
+                        audio_dense.transpose(1, 2), size=T_frames, mode='linear', align_corners=False
+                    ).transpose(1, 2)
+                else:
+                    audio_dense_interp = audio_dense
+
+                merged = torch.cat([audio_dense_interp, visual_dense, lip_dense], dim=-1)  # (B, T_frames, 3*dense_dim)
+            else:
+                # Video-level: Pool
+                audio_pooled = self._masked_pool(audio_dense, audio_mask)
+                visual_pooled = self._masked_pool(visual_dense, frames_mask)
+                lip_pooled = self._masked_pool(lip_dense, frames_mask)
+
+                merged = torch.cat([audio_pooled, visual_pooled, lip_pooled], dim=-1)  # (B, 3*dense_dim)
 
         # === Classification ===
-        logits = self.classifier(merged)  # (B, num_classes)
+        if frame_level:
+            # Apply classifier to each frame (TimeDistributed)
+            B, T, D = merged.shape
+            merged_flat = merged.view(B * T, D)  # (B*T, D)
+            logits_flat = self.classifier(merged_flat)  # (B*T, num_classes)
+            logits = logits_flat.view(B, T, -1)  # (B, T, num_classes)
+        else:
+            # Single prediction for video
+            logits = self.classifier(merged)  # (B, num_classes)
 
         return logits
 

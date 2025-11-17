@@ -14,6 +14,7 @@ from pathlib import Path
 from tqdm import tqdm
 import sys
 import logging
+import gc
 from multiprocessing import Pool, cpu_count
 from functools import partial
 import time
@@ -23,7 +24,8 @@ from typing import Dict, List, Tuple, Optional
 sys.path.insert(0, str(Path(__file__).parent / "av_module"))
 sys.path.insert(0, str(Path(__file__).parent / "mobile_deepfake_detector"))
 
-from src.data.preprocessing import ShortsPreprocessor
+from src.data.preprocessing import ShortsPreprocessor, match_phoneme_to_frames
+from src.utils.hybrid_phoneme_aligner_v2 import HybridPhonemeAligner
 
 # 로깅 설정
 logging.basicConfig(
@@ -45,6 +47,12 @@ def process_single_video(
         (success_dict, fail_dict): 성공/실패 정보
     """
     idx, sample, base_path, config, output_dir = args
+
+    # Logger 초기화 (worker 프로세스용)
+    logger = logging.getLogger(__name__)
+
+    # video_id 추출
+    video_id = sample['video_id']
 
     try:
         # Preprocessor 초기화 (각 프로세스마다)
@@ -85,11 +93,110 @@ def process_single_video(
 
         # 저장
         output_path = output_dir / f"{idx:05d}.npz"
+
+        # Phase 2: Extract real phoneme labels using HybridPhonemeAligner
+        num_frames = result['frames'].shape[0]
+
+        # Initialize HybridPhonemeAligner (singleton pattern to avoid re-initialization)
+        if not hasattr(process_single_video, 'aligner'):
+            process_single_video.aligner = HybridPhonemeAligner(
+                whisper_model="base",  # Use base model for good accuracy + speed balance
+                device="cuda",  # GPU mode with CUDA 12.x (2-3x faster than CPU)
+                compute_type="float16"  # FP16 precision for GPU optimization
+            )
+
+        # Get actual FPS and total frames from video
+        import cv2
+        cap = cv2.VideoCapture(str(video_path))
+        fps = cap.get(cv2.CAP_PROP_FPS) if cap.isOpened() else 25.0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if cap.isOpened() else num_frames
+        cap.release()
+
+        # Calculate actual frame indices (uniform sampling)
+        # This matches the logic in VideoPreprocessor._uniform_sampling()
+        if total_frames <= num_frames:
+            frame_indices = np.arange(num_frames, dtype=np.float32)
+        else:
+            step = total_frames / num_frames
+            frame_indices = np.array([int(i * step) for i in range(num_frames)], dtype=np.float32)
+
+        # Create timestamps using actual frame indices and FPS
+        timestamps = frame_indices / fps
+
+        # Perform phoneme alignment
+        try:
+            logger.info(f"[1/3] Phoneme alignment started for {video_id}")
+            alignment = process_single_video.aligner.align_video(video_path)
+
+            # Extract phoneme intervals from alignment
+            phoneme_intervals = [
+                {'phoneme': p, 'start': s, 'end': e}
+                for p, (s, e) in zip(alignment['phonemes'], alignment['intervals'])
+            ]
+
+            # Match phonemes to frames using PIA-main approach
+            phoneme_labels = match_phoneme_to_frames(phoneme_intervals, timestamps)
+
+            # Debug print
+            unique_phonemes = set(phoneme_labels)
+            logger.info(f"  ✓ Phoneme: shape={phoneme_labels.shape}, unique={len(unique_phonemes)}, phonemes={unique_phonemes}")
+
+        except Exception as e:
+            # Fallback to silence labels if alignment fails
+            logging.warning(f"Phoneme alignment failed for {sample['video_id']}: {e}")
+            phoneme_labels = np.array(['<sil>'] * num_frames, dtype=object)
+
+        # Extract MAR geometry features (geo_dim=1, PIA paper)
+        from mobile_deepfake_detector.src.utils.enhanced_mar_extractor import EnhancedMARExtractor
+
+        if not hasattr(process_single_video, 'mar_extractor'):
+            process_single_video.mar_extractor = EnhancedMARExtractor()
+
+        try:
+            logger.info(f"[2/3] MAR extraction started for {video_id}")
+            mar_result = process_single_video.mar_extractor.extract_from_video(video_path, max_frames=num_frames)
+            geometry = np.array(mar_result['mar_vertical']).reshape(-1, 1)  # (T, 1) - PIA paper format
+
+            # Debug print
+            nonzero_ratio = np.sum(geometry != 0) / geometry.size
+            mean_val = np.mean(geometry[geometry != 0]) if nonzero_ratio > 0 else 0
+            logger.info(f"  ✓ MAR: shape={geometry.shape}, nonzero={nonzero_ratio:.1%}, mean={mean_val:.4f}, range=[{np.min(geometry):.4f}, {np.max(geometry):.4f}]")
+        except Exception as e:
+            logger.warning(f"MAR extraction failed for {video_id}: {e}, using zeros")
+            geometry = np.zeros((num_frames, 1), dtype=np.float32)
+
+        # Extract ArcFace embeddings (512-dim)
+        from mobile_deepfake_detector.src.utils.arcface_extractor import ArcFaceExtractor
+
+        if not hasattr(process_single_video, 'arcface_extractor'):
+            process_single_video.arcface_extractor = ArcFaceExtractor(device="cuda", model_name="buffalo_l")
+
+        try:
+            logger.info(f"[3/3] ArcFace extraction started for {video_id}")
+            arcface = process_single_video.arcface_extractor.extract_from_video(
+                video_path,
+                max_frames=num_frames,
+                show_progress=False
+            )  # (T, 512)
+
+            # Debug print
+            zero_frames = np.sum(np.all(arcface == 0, axis=1))
+            valid_frames = num_frames - zero_frames
+            avg_norm = np.mean(np.linalg.norm(arcface, axis=1))
+            logger.info(f"  ✓ ArcFace: shape={arcface.shape}, valid={valid_frames}/{num_frames} ({valid_frames/num_frames:.1%}), avg_norm={avg_norm:.4f}")
+        except Exception as e:
+            logger.warning(f"ArcFace extraction failed for {video_id}: {e}, using zeros")
+            arcface = np.zeros((num_frames, 512), dtype=np.float32)
+
         np.savez_compressed(
             output_path,
             frames=result['frames'],
             audio=result['audio'],
             lip=result['lip'],
+            arcface=arcface,                 # ✅ REAL: Per-frame ArcFace embeddings (512-dim)
+            geometry=geometry,               # ✅ REAL: Per-frame MAR geometry (1-dim)
+            phoneme_labels=phoneme_labels,   # ✅ REAL: Per-frame phoneme labels
+            timestamps=timestamps,           # ✅ REAL: Per-frame timestamps (actual FPS)
             label=1 if sample['label'] == 'fake' else 0,
             video_id=sample['video_id']
         )
@@ -102,6 +209,9 @@ def process_single_video(
             'frames_count': result['frames'].shape[0],
             'audio_count': result['audio'].shape[0]
         }
+
+        # Force garbage collection to free memory
+        gc.collect()
 
         return success_dict, None
 
@@ -147,7 +257,8 @@ def preprocess_dataset_parallel(
     split: str = 'train',
     num_workers: int = None,
     batch_size: int = 50,
-    resume: bool = True
+    resume: bool = True,
+    max_videos: int = None
 ):
     """
     병렬 처리로 데이터셋 전처리
@@ -157,6 +268,7 @@ def preprocess_dataset_parallel(
         num_workers: 병렬 작업 수 (None = CPU 코어 수 - 1)
         batch_size: 체크포인트 저장 주기
         resume: 이전 작업 재개 여부
+        max_videos: 테스트용 최대 비디오 수 (None = 전체 처리)
     """
     print(f"\n{'='*80}")
     print(f"병렬 전처리: {split.upper()} SPLIT")
@@ -173,11 +285,11 @@ def preprocess_dataset_parallel(
     print()
 
     # 경로 설정
-    index_file = Path(f"preprocessed_data_real/{split}_index.json")
-    output_dir = Path(f"preprocessed_data_real/{split}")
+    index_file = Path(f"preprocessed_data_real/{split}_index.json")  # 인덱스는 기존 사용
+    output_dir = Path(f"preprocessed_data_phoneme/{split}")  # ✨ 새 폴더 (음소 라벨 포함)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    checkpoint_path = Path(f"preprocessed_data_real/{split}_checkpoint.json")
+    checkpoint_path = Path(f"preprocessed_data_phoneme/{split}_checkpoint.json")  # ✨ 새 폴더
 
     # 인덱스 로드
     print(f"[1/5] 인덱스 로드: {index_file}")
@@ -200,6 +312,11 @@ def preprocess_dataset_parallel(
         if idx not in processed_indices
     ]
 
+    # 테스트용 최대 개수 제한
+    if max_videos is not None and len(samples_to_process) > max_videos:
+        print(f"  [TEST] 테스트 모드: {len(samples_to_process)}개 중 {max_videos}개만 처리")
+        samples_to_process = samples_to_process[:max_videos]
+
     if not samples_to_process:
         print("\n모든 샘플이 이미 처리되었습니다!")
         return successful, failed
@@ -219,7 +336,7 @@ def preprocess_dataset_parallel(
         'n_mfcc': 40,
         'hop_length': 512,
         'n_fft': 2048,
-        'lip_size': [96, 96]
+        'lip_size': [112, 112]
     }
     print(f"  - 프레임: {config['max_frames']}개, {config['frame_size']}")
     print(f"  - 오디오: {config['n_mfcc']} MFCC, {config['sample_rate']}Hz")
@@ -297,14 +414,14 @@ def preprocess_dataset_parallel(
     print(f"[5/5] 결과 저장")
 
     # 성공한 샘플 인덱스
-    success_index_path = Path(f"preprocessed_data_real/{split}_preprocessed_index.json")
+    success_index_path = Path(f"preprocessed_data_phoneme/{split}_preprocessed_index.json")  # ✨ 새 폴더
     with open(success_index_path, 'w', encoding='utf-8') as f:
         json.dump(successful, f, indent=2, ensure_ascii=False)
     print(f"  [OK] 성공: {success_index_path} ({len(successful)} 샘플)")
 
     # 실패한 샘플 로그
     if failed:
-        failed_log_path = Path(f"preprocessed_data_real/{split}_failed.json")
+        failed_log_path = Path(f"preprocessed_data_phoneme/{split}_failed.json")  # ✨ 새 폴더
         with open(failed_log_path, 'w', encoding='utf-8') as f:
             json.dump(failed, f, indent=2, ensure_ascii=False)
         print(f"  [XX] 실패: {failed_log_path} ({len(failed)} 샘플)")
@@ -403,6 +520,8 @@ if __name__ == "__main__":
                         help='체크포인트 무시하고 처음부터 시작')
     parser.add_argument('--status', action='store_true',
                         help='현재 전처리 상태만 확인')
+    parser.add_argument('--max-videos', type=int, default=None,
+                        help='테스트용: 처리할 최대 비디오 수 (기본: 전체)')
 
     args = parser.parse_args()
 
@@ -439,7 +558,8 @@ if __name__ == "__main__":
             split=split,
             num_workers=args.workers,
             batch_size=args.batch_size,
-            resume=not args.no_resume
+            resume=not args.no_resume,
+            max_videos=args.max_videos
         )
         elapsed = time.time() - start
 

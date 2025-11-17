@@ -101,6 +101,10 @@ class Trainer:
 
         # Metrics
         self.best_val_acc = 0.0
+        self.best_val_loss = float('inf')
+        self.best_val_precision = 0.0
+        self.best_val_recall = 0.0
+        self.best_val_f1 = 0.0
         self.current_epoch = 0
 
         # TensorBoard
@@ -354,6 +358,10 @@ class Trainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
             'best_val_acc': self.best_val_acc,
+            'best_val_loss': self.best_val_loss,
+            'best_val_precision': self.best_val_precision,
+            'best_val_recall': self.best_val_recall,
+            'best_val_f1': self.best_val_f1,
             'config': self.config
         }
 
@@ -411,10 +419,15 @@ class Trainer:
                 self.writer.add_scalar('epoch/val_acc', val_metrics['accuracy'], epoch)
                 self.writer.add_scalar('epoch/val_f1', val_metrics['f1_score'], epoch)
 
-                # Check if best
+                # Check if best (based on validation accuracy)
                 is_best = val_metrics['accuracy'] > self.best_val_acc
                 if is_best:
+                    # Update all best metrics when val_acc improves
                     self.best_val_acc = val_metrics['accuracy']
+                    self.best_val_loss = val_metrics['loss']
+                    self.best_val_precision = val_metrics['precision']
+                    self.best_val_recall = val_metrics['recall']
+                    self.best_val_f1 = val_metrics['f1_score']
                     patience_counter = 0
                 else:
                     patience_counter += 1
@@ -454,7 +467,7 @@ def main():
         help="Path to checkpoint to resume from"
     )
     parser.add_argument(
-        "--num_workers",
+        "--workers",
         type=int,
         default=None,
         help="Number of data loading workers (overrides config)"
@@ -464,6 +477,24 @@ def main():
         type=int,
         default=None,
         help="Number of folds for K-Fold Cross Validation (e.g., 5)"
+    )
+    parser.add_argument(
+        "--use-weighted-sampler",
+        action="store_true",
+        help="Enable weighted sampler for class imbalance (overrides config)"
+    )
+    parser.add_argument(
+        "--use-weighted-loss",
+        action="store_true",
+        help="Enable weighted loss for class imbalance (overrides config)"
+    )
+    parser.add_argument(
+        "--class-weights",
+        type=float,
+        nargs=2,
+        default=None,
+        metavar=("REAL", "FAKE"),
+        help="Class weights [Real, Fake] (e.g., 2.0 1.0)"
     )
 
     args = parser.parse_args()
@@ -475,8 +506,16 @@ def main():
         import numpy as np
 
         config = load_config(args.config)
-        if args.num_workers is not None:
-            config['training']['num_workers'] = args.num_workers
+
+        # Override config with command-line arguments
+        if args.workers is not None:
+            config['training']['num_workers'] = args.workers
+        if args.use_weighted_sampler:
+            config['training']['use_weighted_sampler'] = True
+        if args.use_weighted_loss:
+            config['training']['use_weighted_loss'] = True
+        if args.class_weights is not None:
+            config['training']['class_weights'] = args.class_weights
 
         # Merge all data
         data_root = Path(config['dataset']['root_dir'])
@@ -525,6 +564,11 @@ def main():
             fold_config['paths']['output_dir'] = f"outputs/kfold/fold_{fold_idx+1}"
             fold_config['paths']['log_file'] = f"kfold_fold{fold_idx+1}.log"
 
+            # Change checkpoint prefix for balanced training (K-Fold)
+            if fold_config['training'].get('use_weighted_sampler', False) or fold_config['training'].get('use_weighted_loss', False):
+                original_prefix = fold_config['training']['checkpoint'].get('prefix', 'mmms-ba_')
+                fold_config['training']['checkpoint']['prefix'] = original_prefix.rstrip('_') + '_balanced_'
+
             print(f"Training samples: {len(train_data)}, Val samples: {len(val_data)}")
 
             # Create logger for this fold
@@ -560,11 +604,40 @@ def main():
             fold_logger.info(f"[OK] Loaded {len(train_dataset)} train samples")
             fold_logger.info(f"[OK] Loaded {len(val_dataset)} val samples")
 
-            # Create dataloaders (no weighted sampler for K-Fold)
+            # Weighted sampler for class imbalance (K-Fold)
+            train_sampler = None
+            if fold_config['training'].get('use_weighted_sampler', False):
+                # Calculate class distribution
+                labels = [sample['label'] for sample in train_dataset.samples]
+                label_to_int = {'real': 0, 'fake': 1}
+                labels_int = [label_to_int[label] for label in labels]
+
+                class_counts = [labels_int.count(0), labels_int.count(1)]  # [Real, Fake]
+                fold_logger.info(f"  Fold {fold_idx+1} class distribution: Real={class_counts[0]}, Fake={class_counts[1]}")
+
+                # Check for zero counts
+                if min(class_counts) == 0:
+                    fold_logger.warning(f"  ⚠️ Severe class imbalance (Real={class_counts[0]}, Fake={class_counts[1]})")
+                    fold_logger.warning(f"  ⚠️ Disabling weighted sampler for this fold")
+                else:
+                    # Calculate sample weights (inverse frequency)
+                    class_weights = [1.0 / count for count in class_counts]
+                    sample_weights = [class_weights[label] for label in labels_int]
+
+                    # Create sampler
+                    train_sampler = WeightedRandomSampler(
+                        weights=sample_weights,
+                        num_samples=len(train_dataset),
+                        replacement=True
+                    )
+                    fold_logger.info(f"  [OK] Weighted sampler enabled: Real weight={class_weights[0]:.4f}, Fake weight={class_weights[1]:.4f}")
+
+            # Create dataloaders
             train_loader = create_dataloader(
                 train_dataset,
                 batch_size=fold_config['training']['batch_size'],
-                shuffle=True,
+                shuffle=(train_sampler is None),  # Disable shuffle if using sampler
+                sampler=train_sampler,
                 num_workers=fold_config['training']['num_workers'],
                 pin_memory=True,
                 persistent_workers=False,
@@ -597,12 +670,16 @@ def main():
                 fold_results = {
                     'fold': fold_idx + 1,
                     'best_val_acc': checkpoint.get('best_val_acc', 0.0),
-                    'best_val_f1': checkpoint.get('best_val_f1', 0.0),
                     'best_val_loss': checkpoint.get('best_val_loss', float('inf')),
+                    'best_val_precision': checkpoint.get('best_val_precision', 0.0),
+                    'best_val_recall': checkpoint.get('best_val_recall', 0.0),
+                    'best_val_f1': checkpoint.get('best_val_f1', 0.0),
                     'best_epoch': checkpoint.get('epoch', 0)
                 }
                 results.append(fold_results)
-                fold_logger.info(f"[OK] Fold {fold_idx+1} completed: Val Acc={fold_results['best_val_acc']:.4f}, Val F1={fold_results['best_val_f1']:.4f}")
+                fold_logger.info(f"[OK] Fold {fold_idx+1} completed: Acc={fold_results['best_val_acc']:.4f}, "
+                                 f"Loss={fold_results['best_val_loss']:.4f}, Precision={fold_results['best_val_precision']:.4f}, "
+                                 f"Recall={fold_results['best_val_recall']:.4f}, F1={fold_results['best_val_f1']:.4f}")
             else:
                 fold_logger.warning(f"[WARNING] Fold {fold_idx+1} checkpoint not found!")
 
@@ -614,19 +691,25 @@ def main():
         if results:
             avg_acc = np.mean([r['best_val_acc'] for r in results])
             std_acc = np.std([r['best_val_acc'] for r in results])
-            avg_f1 = np.mean([r['best_val_f1'] for r in results])
-            std_f1 = np.std([r['best_val_f1'] for r in results])
             avg_loss = np.mean([r['best_val_loss'] for r in results])
             std_loss = np.std([r['best_val_loss'] for r in results])
+            avg_precision = np.mean([r['best_val_precision'] for r in results])
+            std_precision = np.std([r['best_val_precision'] for r in results])
+            avg_recall = np.mean([r['best_val_recall'] for r in results])
+            std_recall = np.std([r['best_val_recall'] for r in results])
+            avg_f1 = np.mean([r['best_val_f1'] for r in results])
+            std_f1 = np.std([r['best_val_f1'] for r in results])
 
-            print(f"Validation Accuracy: {avg_acc:.4f} ± {std_acc:.4f}")
-            print(f"Validation F1 Score: {avg_f1:.4f} ± {std_f1:.4f}")
-            print(f"Validation Loss: {avg_loss:.4f} ± {std_loss:.4f}")
+            print(f"Validation Accuracy:  {avg_acc:.4f} ± {std_acc:.4f}")
+            print(f"Validation Loss:      {avg_loss:.4f} ± {std_loss:.4f}")
+            print(f"Validation Precision: {avg_precision:.4f} ± {std_precision:.4f}")
+            print(f"Validation Recall:    {avg_recall:.4f} ± {std_recall:.4f}")
+            print(f"Validation F1 Score:  {avg_f1:.4f} ± {std_f1:.4f}")
             print(f"\nPer-fold results:")
 
             for result in results:
-                print(f"  Fold {result['fold']}: Acc={result['best_val_acc']:.4f}, "
-                      f"F1={result['best_val_f1']:.4f}, Loss={result['best_val_loss']:.4f}, "
+                print(f"  Fold {result['fold']}: Acc={result['best_val_acc']:.4f}, Loss={result['best_val_loss']:.4f}, "
+                      f"Prec={result['best_val_precision']:.4f}, Rec={result['best_val_recall']:.4f}, F1={result['best_val_f1']:.4f}, "
                       f"Epoch={result['best_epoch']}")
 
             # Save results to JSON
@@ -658,10 +741,22 @@ def main():
 
     # Load config
     config = load_config(args.config)
-    
-    # Override num_workers if specified
-    if args.num_workers is not None:
-        config['training']['num_workers'] = args.num_workers
+
+    # Override config with command-line arguments
+    if args.workers is not None:
+        config['training']['num_workers'] = args.workers
+    if args.use_weighted_sampler:
+        config['training']['use_weighted_sampler'] = True
+    if args.use_weighted_loss:
+        config['training']['use_weighted_loss'] = True
+    if args.class_weights is not None:
+        config['training']['class_weights'] = args.class_weights
+
+    # Change checkpoint prefix for balanced training (non-K-Fold)
+    # This creates: mmms-ba_best_balanced.pth, mmms-ba_last_balanced.pth
+    if config['training'].get('use_weighted_sampler', False) or config['training'].get('use_weighted_loss', False):
+        original_prefix = config['training']['checkpoint'].get('prefix', 'mmms-ba_')
+        config['training']['checkpoint']['prefix'] = original_prefix.rstrip('_') + '_balanced_'
 
     # Create datasets (전처리된 npz 파일 사용!)
     logger = logging.getLogger("main")

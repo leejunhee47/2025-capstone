@@ -16,7 +16,7 @@ from visualize_temporal_prediction import visualize_temporal_prediction
 def main():
     # Configuration
     original_video_root = "E:/capstone/real_deepfake_dataset/003.딥페이크/1.Training/원천데이터"
-    model_path = "E:/capstone/mobile_deepfake_detector/models/checkpoints/mmms-ba_best.pth"
+    model_path = "E:/capstone/mobile_deepfake_detector/models/kfold/fold_4/mmms-ba_balanced_best.pth"  # Fold 4 model (99.45% Val Acc, Weighted Sampler/Loss)
     config_path = "E:/capstone/mobile_deepfake_detector/configs/train_teacher_korean.yaml"
 
     # Test samples: 3 Fake, 2 Real
