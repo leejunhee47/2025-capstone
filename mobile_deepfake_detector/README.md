@@ -92,5 +92,11 @@ outputs/xai/hybrid/<run_id>/
 
 ---
 
+## 7. 다운로드 자료
+- 예시 fake 영상: https://drive.google.com/file/d/1NtsfoI-gJ1YHdgAylpW8CC6D6ddq-qd7/view?usp=sharing
+- 예시 mmms-ba 모델 파일: https://drive.google.com/file/d/13I52pthEDoTij4pKKK-cY_1GKhle9zfm/view?usp=sharing
+- 예시 pia 모델 파일: https://drive.google.com/file/d/1KeBVQ9MRj4IPU9Qc8njuz6QaUrdoCMQP/view?usp=sharing
+
+
 필요한 이슈나 제안이 있으면 `AI` 브랜치를 기반으로 PR을 올려주세요. 즐거운 디버깅 되세요!
 
