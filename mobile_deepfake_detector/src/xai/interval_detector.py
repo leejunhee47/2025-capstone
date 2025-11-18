@@ -12,7 +12,7 @@ import numpy as np
 from typing import List, Dict
 import logging
 
-from src.xai.hybrid_utils import group_consecutive_frames
+from .hybrid_utils import group_consecutive_frames
 
 # Setup logger
 logger = logging.getLogger(__name__)

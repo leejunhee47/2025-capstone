@@ -19,17 +19,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 import logging
 
-import sys
-sys.path.append(str(Path(__file__).parent.parent.parent))
-
-from src.models.pia_model import PIAModel
-from src.utils.config import load_config
+from ..models.pia_model import PIAModel
+from ..utils.config import load_config
 from .pia_explainer import PIAExplainer
 from .pia_visualizer import PIAVisualizer
-from src.data.preprocessing import match_phoneme_to_frames
-from src.utils.hybrid_phoneme_aligner_v2 import HybridPhonemeAligner
-from src.utils.enhanced_mar_extractor import EnhancedMARExtractor
-from src.utils.arcface_extractor import ArcFaceExtractor
+from ..data.preprocessing import match_phoneme_to_frames
+from ..utils.hybrid_phoneme_aligner_v2 import HybridPhonemeAligner
+from ..utils.enhanced_mar_extractor import EnhancedMARExtractor
+from ..utils.arcface_extractor import ArcFaceExtractor
 from .hybrid_utils import (
     get_interval_phoneme_dict,
     resample_frames_to_pia_format,
@@ -411,7 +408,7 @@ class Stage2Analyzer:
         Returns:
             resampled: (14, 5, D)
         """
-        from src.utils.korean_phoneme_config import get_phoneme_vocab, is_kept_phoneme
+        from ..utils.korean_phoneme_config import get_phoneme_vocab, is_kept_phoneme
 
         phoneme_vocab = get_phoneme_vocab()
         N, D = features.shape

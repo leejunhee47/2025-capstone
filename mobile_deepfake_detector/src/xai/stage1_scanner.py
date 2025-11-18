@@ -18,11 +18,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 import logging
 
-import sys
-sys.path.append(str(Path(__file__).parent.parent.parent))
-
-from src.models.teacher import MMMSBA
-from src.utils.config import load_config
+from ..models.teacher import MMMSBA
+from ..utils.config import load_config
 from .feature_extractor import FeatureExtractor
 from .hybrid_utils import format_stage1_to_interface, group_consecutive_frames
 

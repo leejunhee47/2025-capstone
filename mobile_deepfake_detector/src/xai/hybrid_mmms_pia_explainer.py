@@ -22,20 +22,18 @@ import logging
 from tqdm import tqdm
 
 # Import existing models and utilities
-import sys
 import cv2
-sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from src.models.teacher import MMMSBA
-from src.models.pia_model import PIAModel
-from src.utils.config import load_config
-from src.xai.pia_explainer import PIAExplainer
-from src.xai.pia_visualizer import PIAVisualizer
-from src.data.preprocessing import ShortsPreprocessor, match_phoneme_to_frames
-from src.utils.hybrid_phoneme_aligner_v2 import HybridPhonemeAligner
-from src.utils.enhanced_mar_extractor import EnhancedMARExtractor
-from src.utils.arcface_extractor import ArcFaceExtractor
-from src.xai.hybrid_utils import (
+from ..models.teacher import MMMSBA
+from ..models.pia_model import PIAModel
+from ..utils.config import load_config
+from .pia_explainer import PIAExplainer
+from .pia_visualizer import PIAVisualizer
+from ..data.preprocessing import ShortsPreprocessor, match_phoneme_to_frames
+from ..utils.hybrid_phoneme_aligner_v2 import HybridPhonemeAligner
+from ..utils.enhanced_mar_extractor import EnhancedMARExtractor
+from ..utils.arcface_extractor import ArcFaceExtractor
+from .hybrid_utils import (
     group_consecutive_frames,
     get_interval_phoneme_dict,
     resample_frames_to_pia_format,

@@ -14,10 +14,7 @@ from pathlib import Path
 from typing import Dict, Tuple, Any
 import logging
 
-import sys
-sys.path.append(str(Path(__file__).parent.parent.parent))
-
-from src.data.preprocessing import ShortsPreprocessor
+from ..data.preprocessing import ShortsPreprocessor
 
 # Setup logger
 logger = logging.getLogger(__name__)
