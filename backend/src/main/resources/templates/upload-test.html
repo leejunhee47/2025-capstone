@@ -4,47 +4,70 @@
     <meta charset="UTF-8">
     <title>영상 업로드 테스트</title>
     <style>
-        body { font-family: sans-serif; display: grid; place-items: center; min-height: 90vh; }
-        #upload-form { width: 500px; padding: 20px; border: 1px solid #ccc; border-radius: 8px; }
+        body { font-family: sans-serif; display: grid; place-items: center; min-height: 90vh; margin: 0; background-color: #f4f4f9; }
+        #upload-form { width: 500px; padding: 30px; background: white; border: 1px solid #ddd; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        h3 { margin-top: 0; text-align: center; color: #333; }
 
-        /* 1. 드래그 앤 드롭 영역 */
-        #drop-zone {
-            border: 3px dashed #ccc;
+        /* 입력 필드 스타일 그룹 */
+        .input-group {
+            margin-bottom: 20px;
+        }
+        .input-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+            color: #555;
+        }
+        .input-group input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ccc;
             border-radius: 8px;
-            padding: 50px;
-            text-align: center;
-            color: #777;
-            cursor: pointer;
-            transition: border-color 0.3s, background-color 0.3s;
+            box-sizing: border-box; /* padding 포함해서 너비 계산 */
+            font-size: 14px;
         }
 
-        /* 2. 드래그 시 시각적 피드백 */
+        /* 드래그 앤 드롭 영역 */
+        #drop-zone {
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            padding: 40px 20px;
+            text-align: center;
+            color: #888;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background-color: #fafafa;
+        }
+
         #drop-zone.drag-over {
             border-color: #007bff;
-            background-color: #f0f8ff;
+            background-color: #eef6ff;
+            color: #007bff;
         }
 
-        /* 3. 실제 파일 input은 숨김 */
-        #file-input {
-            display: none;
-        }
+        #file-input { display: none; }
 
         #file-name {
             margin-top: 10px;
+            font-size: 14px;
+            color: #007bff;
             font-weight: bold;
-            color: #333;
+            text-align: center;
+            min-height: 20px;
         }
 
         button {
             width: 100%;
-            padding: 10px;
-            margin-top: 15px;
+            padding: 14px;
+            margin-top: 20px;
             background-color: #007bff;
             color: white;
             border: none;
-            border-radius: 5px;
+            border-radius: 8px;
             cursor: pointer;
             font-size: 16px;
+            font-weight: bold;
+            transition: background-color 0.2s;
         }
         button:hover { background-color: #0056b3; }
     </style>
@@ -52,19 +75,26 @@
 <body>
 
 <div id="upload-form">
-    <h3>영상 업로드</h3>
+    <h3>딥페이크 탐지 요청</h3>
 
     <form id="form" action="/upload/video" method="POST" enctype="multipart/form-data">
 
-        <div id="drop-zone">
-            <p>여기에 파일을 드래그하세요</p>
-            <p>또는 클릭해서 파일 선택</p>
-            <input type="file" name="file" id="file-input" accept="video/*" />
+        <div class="input-group">
+            <label for="requestId">요청 ID (Request ID)</label>
+            <input type="text" id="requestId" name="requestId" placeholder="예: req_12345" required />
         </div>
 
-        <p id="file-name"></p>
+        <div class="input-group">
+            <label>영상 파일 업로드</label>
+            <div id="drop-zone">
+                <p style="margin: 0; font-size: 24px; margin-bottom: 10px;">📁</p>
+                <p style="margin: 0;">여기에 파일을 드래그하거나<br>클릭해서 선택하세요</p>
+                <input type="file" name="file" id="file-input" accept="video/*" required />
+            </div>
+            <p id="file-name"></p>
+        </div>
 
-        <button type="submit">업로드</button>
+        <button type="submit">분석 요청하기</button>
     </form>
 </div>
 
@@ -73,45 +103,34 @@
     const fileInput = document.getElementById('file-input');
     const fileNameDisplay = document.getElementById('file-name');
 
-    // 드롭 영역 클릭 시 파일 input 클릭
-    dropZone.addEventListener('click', () => {
-        fileInput.click();
-    });
+    // 클릭 시 파일 선택창 열기
+    dropZone.addEventListener('click', () => fileInput.click());
 
-    // 파일 input 변경 시(파일 선택 시) 파일 이름 표시
+    // 파일 선택 시 이름 표시
     fileInput.addEventListener('change', () => {
         if (fileInput.files.length > 0) {
-            fileNameDisplay.textContent = fileInput.files[0].name;
+            fileNameDisplay.textContent = "선택된 파일: " + fileInput.files[0].name;
         }
     });
 
-    // --- 드래그 앤 드롭 로직 ---
-
-    // 1. 드래그 오버: 시각적 피드백
+    // 드래그 앤 드롭 이벤트
     dropZone.addEventListener('dragover', (e) => {
-        e.preventDefault(); // 기본 이벤트(파일 열기) 방지
+        e.preventDefault();
         dropZone.classList.add('drag-over');
     });
 
-    // 2. 드래그 리브: 시각적 피드백 제거
     dropZone.addEventListener('dragleave', (e) => {
         e.preventDefault();
         dropZone.classList.remove('drag-over');
     });
 
-    // 3. 드롭: 파일 처리
     dropZone.addEventListener('drop', (e) => {
         e.preventDefault();
         dropZone.classList.remove('drag-over');
-
-        // 드롭된 파일 가져오기
         const files = e.dataTransfer.files;
-
         if (files.length > 0) {
-            // (중요) 드롭된 파일을 숨겨진 file input의 파일로 설정
             fileInput.files = files;
-            // 파일 이름 표시
-            fileNameDisplay.textContent = files[0].name;
+            fileNameDisplay.textContent = "선택된 파일: " + files[0].name;
         }
     });
 </script>

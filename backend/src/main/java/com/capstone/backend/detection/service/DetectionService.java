@@ -1,5 +1,6 @@
 package com.capstone.backend.detection.service;
 
+import com.capstone.backend.detection.exceptions.InvalidRequestId;
 import com.capstone.backend.detection.model.DetectionRequest;
 import com.capstone.backend.detection.model.DetectionStatus;
 import com.capstone.backend.detection.repository.DetectionRequestRepository;
@@ -14,7 +15,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
-import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -34,28 +34,16 @@ public class DetectionService {
     @Value("${ai.url.request}")
     private String aiUrl;
 
-    @Value("${ai.url.response}")
-    private String aiCallbackUrl;
-
-
-
     @Autowired
-    public DetectionService(DetectionRequestRepository detectionRequestRepository , WebClient webClient) {
+    public DetectionService(DetectionRequestRepository detectionRequestRepository ,  WebClient webClient) {
         this.detectionRequestRepository = detectionRequestRepository;
         this.webClient = webClient;
-
     }
 
-    /**
-     * 유효성 검사를 통과한 요청을 DB에 'PENDING' 상태로 저장합니다.
-     * @param member 요청을 보낸 사용자
-     * @param callbackUrl 결과를 받을 URL
-     * @return 저장된 DetectionRequest 엔티티
-     */
     @Transactional
     public DetectionRequest saveNewDetectionRequest(Member member,
                                                     String callbackUrl){
-
+        // (기존과 동일)
         DetectionRequest newRequest = DetectionRequest.builder()
                 .member(member)
                 .callbackUrl(callbackUrl)
@@ -63,14 +51,9 @@ public class DetectionService {
 
         return detectionRequestRepository.save(newRequest);
     }
-
-
-
-    // todo :  예외처리 작성
-
     @Async
     @Transactional
-    public void startDetection(DetectionRequest request , MultipartFile file) throws IllegalArgumentException{
+    public void startFileDetection(DetectionRequest request , String savedFilePath) throws IllegalArgumentException{
 
         DetectionRequest managedRequest = detectionRequestRepository.findById(request.getRequestId())
                 .orElse(null);
@@ -79,33 +62,23 @@ public class DetectionService {
             throw new IllegalArgumentException("DetectionRequest not found with ID: " + request.getRequestId());
         }
 
-
-        // TODO : 파일 경로 수정 필요
-        String uniqueFileName = managedRequest.getRequestId() + "";
-        File dest = new File(uploadDir + uniqueFileName);
-
         try {
-            // 1. 파일 저장
-            file.transferTo(dest);
 
-            // 2. DB 갱신
-            managedRequest.setVideoPath(dest.getPath());
+            managedRequest.setVideoPath(savedFilePath);
             managedRequest.setStatus(DetectionStatus.PROCESSING);
             detectionRequestRepository.save(managedRequest);
 
-            // 3. AI 서버에 분석 요청
-            
+            // AI 서버에 분석 요청
             log.info("AI 서버 분석 요청 시작. Request ID: {}", managedRequest.getRequestId());
 
             // HTTP 요청 본문(Body) 생성
             MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
 
             body.add("requestId" , managedRequest.getRequestId()); // 요청 ID
-            body.add("file", new FileSystemResource(dest)); // 파일
-            body.add("callbackUrl", aiCallbackUrl); // 콜백 URL
+            body.add("file", new FileSystemResource(savedFilePath)); // 파일
 
             webClient.post()
-                    .uri(aiUrl + "/analyze") // AI 서버의 엔드포인트 (예: /analyze, /predict 등)
+                    .uri(aiUrl + "request")
                     .contentType(MediaType.MULTIPART_FORM_DATA)
                     .body(BodyInserters.fromValue(body))
                     .retrieve() // 응답 받기
@@ -114,22 +87,17 @@ public class DetectionService {
 
             log.info("AI 서버 분석 요청 성공. Request ID: {}", managedRequest.getRequestId());
 
-
-
-
-
         }catch (Exception e) {
+            log.error("비동기 파일 처리 중 오류 발생 (RequestId: {})", managedRequest.getRequestId(), e);
             managedRequest.setStatus(DetectionStatus.FAILED);
             detectionRequestRepository.save(managedRequest);
             throw new RuntimeException(managedRequest.getRequestId() +"", e);
         }
     }
 
-
     @Async
     @Transactional
-    public void startDetection(DetectionRequest request ,  String url) {
-
+    public void startUrlDetection(DetectionRequest request ,  String url) {
 
         DetectionRequest managedRequest = detectionRequestRepository.findById(request.getRequestId())
                 .orElse(null);
@@ -145,7 +113,6 @@ public class DetectionService {
         }
 
         try {
-
             String outputFilePath = uploadDir + File.separator + managedRequest.getRequestId() + ".mp4";
             File downloadedFile = new File(outputFilePath);
 
@@ -157,7 +124,6 @@ public class DetectionService {
                     "mp4",
                     url
             };
-
 
             ProcessBuilder processBuilder = new ProcessBuilder(command);
             processBuilder.redirectErrorStream(true);
@@ -174,18 +140,17 @@ public class DetectionService {
             if (exitCode != 0) {
                 managedRequest.setStatus(DetectionStatus.FAILED);
                 detectionRequestRepository.save(managedRequest);
+                log.error("yt-dlp process failed (Exit Code: {}) for RequestId: {}", exitCode, request.getRequestId());
                 throw new RuntimeException("yt-dlp process failed with exit code: " + exitCode);
             }
 
-
-            // 2. DB 갱신
+            // DB 갱신
             managedRequest.setVideoPath(outputFilePath);
             managedRequest.setStatus(DetectionStatus.PROCESSING);
             detectionRequestRepository.save(managedRequest);
 
-            // 3. AI 서버에 분석 요청
-
-
+            //  AI 서버에 분석 요청
+            // TODO : AI 서버에 분석 요청 로직 작성
             log.info("AI 서버 분석 요청 시작. Request ID: {}", managedRequest.getRequestId());
 
             // HTTP 요청 본문(Body) 생성
@@ -193,10 +158,9 @@ public class DetectionService {
 
             body.add("requestId" , managedRequest.getRequestId()); // 요청 ID
             body.add("file", new FileSystemResource(downloadedFile)); // 파일
-            body.add("callbackUrl",aiCallbackUrl); // 콜백 URL
 
             webClient.post()
-                    .uri(aiUrl + "/analyze") // AI 서버의 엔드포인트 (예: /analyze, /predict 등)
+                    .uri(aiUrl + "request")
                     .contentType(MediaType.MULTIPART_FORM_DATA)
                     .body(BodyInserters.fromValue(body))
                     .retrieve() // 응답 받기
@@ -205,26 +169,55 @@ public class DetectionService {
 
             log.info("AI 서버 분석 요청 성공. Request ID: {}", managedRequest.getRequestId());
 
-
         } catch (Exception e) {
-            Thread.currentThread().interrupt();
+            Thread.currentThread().interrupt(); // InterruptedException의 경우 스레드 상태 복원
+            log.error("비동기 URL 처리 중 오류 발생 (RequestId: {})", request.getRequestId(), e);
             managedRequest.setStatus(DetectionStatus.FAILED);
             detectionRequestRepository.save(managedRequest);
-            throw new RuntimeException(managedRequest.getRequestId() +"", e);
+            throw new RuntimeException("Error processing URL for RequestId: " + managedRequest.getRequestId(), e);
         }
     }
 
 
-    @Transactional
-    public void saveResult(){
-
-        // todo : 결과 형식이 결정 되고 , DTO 만든후 작성
+    @Transactional(readOnly = true)
+    public DetectionRequest getDetectionByRequestId(Long requestId) throws InvalidRequestId {
+        return detectionRequestRepository.findById(requestId)
+                .orElseThrow(() -> new InvalidRequestId("Invalid Request ID: " + requestId));
     }
 
 
+    @Transactional
+    public void updateDetectionStatus(Long requestId, DetectionStatus status) throws InvalidRequestId {
+        DetectionRequest request = getDetectionByRequestId(requestId);
+        request.setStatus(status);
+        detectionRequestRepository.save(request);
+    }
 
+
+    public void testDetection(){
+
+        // 1. HTTP 요청 본문(Body) 생성
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        body.add("requestId", "1234");
+        // 주의: 실제 파일 전송 테스트 시에는 null 대신 new FileSystemResource(...)를 넣어야 에러가 안 날 수 있습니다.
+        body.add("callbackUrl", "hello1234");
+
+        try {
+            String response = webClient.post()
+                    .uri(aiUrl + "test")
+                    .contentType(MediaType.MULTIPART_FORM_DATA)
+                    .body(BodyInserters.fromValue(body))
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block();
+
+            // 3. 결과 확인
+            System.out.println("응답 결과: " + response);
+
+        } catch (Exception e) {
+            // 에러 발생 시 로그 출력
+            System.err.println("요청 실패: " + e.getMessage());
+        }
+
+    }
 }
-
-
-
-
