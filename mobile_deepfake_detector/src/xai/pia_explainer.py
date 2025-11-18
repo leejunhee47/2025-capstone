@@ -84,8 +84,8 @@ class PIAExplainer:
             Output: (B*P, E) → reshape to (B, P, E)
             """
             B = 1  # XAI always uses batch size 1
-            P = len(self.phoneme_vocab)
             E = output.size(1)
+            P = output.size(0) // B  # Infer P from output shape (e.g., 14 for actual phonemes)
             self.activations['visual'] = output.detach().view(B, P, E)
 
         h1 = base_model.projector.register_forward_hook(visual_hook)
@@ -109,10 +109,10 @@ class PIAExplainer:
             Output: (B*P, F, E) → mean over F → reshape to (B, P, E)
             """
             B = 1
-            P = len(self.phoneme_vocab)
             # Average across F frames
             features = output.mean(dim=1)  # (B*P, E)
             E = features.size(1)
+            P = features.size(0) // B  # Infer P from output shape (e.g., 14 for actual phonemes)
             self.activations['identity'] = features.detach().view(B, P, E)
 
         h3 = base_model.arc_enc.register_forward_hook(identity_hook)
@@ -453,7 +453,7 @@ class PIAExplainer:
 
         # Extract MAR values: (1, P, F, 1) → (P, F)
         geoms = self.input_data['geoms']  # (1, P, F, 1)
-        mar_values = geoms.squeeze().cpu().numpy()  # (P, F)
+        mar_values = geoms[0, :, :, 0].cpu().numpy()  # (P, F) - explicitly index to avoid squeeze issues
 
         # Compute statistics (exclude padding - 0 values)
         mar_nonzero = mar_values[mar_values != 0]
@@ -466,7 +466,12 @@ class PIAExplainer:
 
         # Find abnormal phonemes (MAR outside expected range)
         abnormal_phonemes = []
+        P_actual = mar_values.shape[0]  # Actual number of phonemes in mar_values
         for pi, phoneme in enumerate(self.phoneme_vocab):
+            # Skip if index exceeds actual data size
+            if pi >= P_actual:
+                break
+
             # Average MAR across F frames for this phoneme
             phoneme_mar = mar_values[pi].mean()
 

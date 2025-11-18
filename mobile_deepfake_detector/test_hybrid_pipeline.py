@@ -19,12 +19,10 @@ import time
 from pathlib import Path
 from typing import Dict, Any
 
-# Import pipeline components
-from src.xai.hybrid_mmms_pia_explainer import (
-    Stage1Scanner,
-    Stage2Analyzer,
-    HybridXAIPipeline,
-)
+# Import pipeline components (using refactored modules)
+from src.xai.hybrid_pipeline import HybridXAIPipeline
+from src.xai.stage1_scanner import Stage1Scanner
+from src.xai.stage2_analyzer import Stage2Analyzer
 
 # Import validator
 from validate_hybrid_output import validate_hybrid_result
@@ -62,7 +60,8 @@ def stage1_scanner():
 
     scanner = Stage1Scanner(
         model_path=str(MMMS_BA_CHECKPOINT),
-        config_path=str(MMMS_BA_CONFIG)
+        config_path=str(MMMS_BA_CONFIG),
+        device="cuda"
     )
     return scanner
 
@@ -99,6 +98,34 @@ def hybrid_pipeline():
     return pipeline
 
 
+@pytest.fixture(scope="module")
+def stage1_result_with_intervals(stage1_scanner):
+    """
+    Stage1 결과와 첫 번째 suspicious interval을 반환하는 fixture.
+    Stage2 테스트들에서 재사용하여 중복 코드 제거 및 실행 시간 단축.
+    """
+    if not TEST_VIDEO_FAKE.exists():
+        pytest.skip(f"Test video not found: {TEST_VIDEO_FAKE}")
+    
+    stage1_result = stage1_scanner.scan_video(
+        video_path=str(TEST_VIDEO_FAKE),
+        threshold=0.6
+    )
+    
+    if len(stage1_result["suspicious_intervals"]) == 0:
+        pytest.skip("No suspicious intervals detected")
+    
+    extracted_features = stage1_result.get('extracted_features', {})
+    if not extracted_features:
+        pytest.skip("extracted_features not found in stage1_result")
+    
+    return {
+        'stage1_result': stage1_result,
+        'interval': stage1_result["suspicious_intervals"][0],
+        'extracted_features': extracted_features
+    }
+
+
 # ===================================
 # Stage 1 Tests
 # ===================================
@@ -133,10 +160,11 @@ class TestStage1Scanner:
         mean_fake_prob = result["statistics"]["mean_fake_prob"]
         print(f"\n[REAL Video] Mean Fake Probability: {mean_fake_prob:.3f}")
 
-        # Save result for inspection
+        # Save result for inspection (exclude numpy arrays for JSON serialization)
         output_path = TEST_OUTPUT_DIR / "stage1_real_result.json"
+        result_for_json = {k: v for k, v in result.items() if k != 'extracted_features'}
         with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(result, f, indent=2, ensure_ascii=False)
+            json.dump(result_for_json, f, indent=2, ensure_ascii=False)
         print(f"Saved Stage1 REAL result to: {output_path}")
 
     def test_scan_fake_video(self, stage1_scanner):
@@ -161,10 +189,11 @@ class TestStage1Scanner:
         print(f"\n[FAKE Video] Mean Fake Probability: {mean_fake_prob:.3f}")
         print(f"[FAKE Video] Suspicious Intervals Detected: {len(suspicious_intervals)}")
 
-        # Save result for inspection
+        # Save result for inspection (exclude numpy arrays for JSON serialization)
         output_path = TEST_OUTPUT_DIR / "stage1_fake_result.json"
+        result_for_json = {k: v for k, v in result.items() if k != 'extracted_features'}
         with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(result, f, indent=2, ensure_ascii=False)
+            json.dump(result_for_json, f, indent=2, ensure_ascii=False)
         print(f"Saved Stage1 FAKE result to: {output_path}")
 
     def test_suspicious_interval_format(self, stage1_scanner):
@@ -226,28 +255,16 @@ class TestStage1Scanner:
 class TestStage2Analyzer:
     """Test Stage2Analyzer (PIA XAI analysis)"""
 
-    def test_analyze_interval_structure(self, stage2_analyzer, stage1_scanner):
+    def test_analyze_interval_structure(self, stage2_analyzer, stage1_result_with_intervals):
         """Test Stage2 output structure on a suspicious interval"""
-        if not TEST_VIDEO_FAKE.exists():
-            pytest.skip(f"Test video not found: {TEST_VIDEO_FAKE}")
-
-        # First get Stage1 results to find a suspicious interval
-        stage1_result = stage1_scanner.scan_video(
-            video_path=str(TEST_VIDEO_FAKE),
-            threshold=0.6
-        )
-
-        suspicious_intervals = stage1_result["suspicious_intervals"]
-        if len(suspicious_intervals) == 0:
-            pytest.skip("No suspicious intervals detected in FAKE video")
-
-        # Analyze first suspicious interval
-        interval = suspicious_intervals[0]
+        interval = stage1_result_with_intervals['interval']
+        extracted_features = stage1_result_with_intervals['extracted_features']
         output_dir = TEST_OUTPUT_DIR / "stage2_test"
 
         result = stage2_analyzer.analyze_interval(
             interval=interval,
             video_path=str(TEST_VIDEO_FAKE),
+            extracted_features=extracted_features,
             output_dir=str(output_dir)
         )
 
@@ -284,24 +301,15 @@ class TestStage2Analyzer:
             json.dump(result, f, indent=2, ensure_ascii=False)
         print(f"\n✅ Stage2 result saved to: {output_path}")
 
-    def test_phoneme_analysis(self, stage2_analyzer, stage1_scanner):
+    def test_phoneme_analysis(self, stage2_analyzer, stage1_result_with_intervals):
         """Test phoneme analysis output"""
-        if not TEST_VIDEO_FAKE.exists():
-            pytest.skip(f"Test video not found: {TEST_VIDEO_FAKE}")
-
-        # Get suspicious interval from Stage1
-        stage1_result = stage1_scanner.scan_video(
-            video_path=str(TEST_VIDEO_FAKE),
-            threshold=0.6
-        )
-
-        if len(stage1_result["suspicious_intervals"]) == 0:
-            pytest.skip("No suspicious intervals detected")
-
-        interval = stage1_result["suspicious_intervals"][0]
+        interval = stage1_result_with_intervals['interval']
+        extracted_features = stage1_result_with_intervals['extracted_features']
+        
         result = stage2_analyzer.analyze_interval(
             interval=interval,
-            video_path=str(TEST_VIDEO_FAKE)
+            video_path=str(TEST_VIDEO_FAKE),
+            extracted_features=extracted_features
         )
 
         # Validate phoneme analysis
@@ -324,24 +332,15 @@ class TestStage2Analyzer:
         print(f"\n[Phoneme Analysis] Top Phoneme: {phoneme_analysis['top_phoneme']}")
         print(f"[Phoneme Analysis] Total Phonemes: {phoneme_analysis['total_phonemes']}")
 
-    def test_korean_explanation(self, stage2_analyzer, stage1_scanner):
+    def test_korean_explanation(self, stage2_analyzer, stage1_result_with_intervals):
         """Test Korean explanation generation"""
-        if not TEST_VIDEO_FAKE.exists():
-            pytest.skip(f"Test video not found: {TEST_VIDEO_FAKE}")
-
-        # Get suspicious interval from Stage1
-        stage1_result = stage1_scanner.scan_video(
-            video_path=str(TEST_VIDEO_FAKE),
-            threshold=0.6
-        )
-
-        if len(stage1_result["suspicious_intervals"]) == 0:
-            pytest.skip("No suspicious intervals detected")
-
-        interval = stage1_result["suspicious_intervals"][0]
+        interval = stage1_result_with_intervals['interval']
+        extracted_features = stage1_result_with_intervals['extracted_features']
+        
         result = stage2_analyzer.analyze_interval(
             interval=interval,
-            video_path=str(TEST_VIDEO_FAKE)
+            video_path=str(TEST_VIDEO_FAKE),
+            extracted_features=extracted_features
         )
 
         # Validate Korean explanation
@@ -478,26 +477,16 @@ class TestPerformance:
         # For 30-second video, should complete in < 60 seconds
         assert elapsed_time < 60, f"Stage1 too slow: {elapsed_time:.2f}s"
 
-    def test_stage2_processing_time(self, stage2_analyzer, stage1_scanner):
+    def test_stage2_processing_time(self, stage2_analyzer, stage1_result_with_intervals):
         """Benchmark Stage2 processing time per interval"""
-        if not TEST_VIDEO_FAKE.exists():
-            pytest.skip(f"Test video not found: {TEST_VIDEO_FAKE}")
-
-        # Get suspicious interval
-        stage1_result = stage1_scanner.scan_video(
-            video_path=str(TEST_VIDEO_FAKE),
-            threshold=0.6
-        )
-
-        if len(stage1_result["suspicious_intervals"]) == 0:
-            pytest.skip("No suspicious intervals detected")
-
-        interval = stage1_result["suspicious_intervals"][0]
+        interval = stage1_result_with_intervals['interval']
+        extracted_features = stage1_result_with_intervals['extracted_features']
 
         start_time = time.time()
         result = stage2_analyzer.analyze_interval(
             interval=interval,
-            video_path=str(TEST_VIDEO_FAKE)
+            video_path=str(TEST_VIDEO_FAKE),
+            extracted_features=extracted_features
         )
         elapsed_time = time.time() - start_time
 
@@ -554,24 +543,15 @@ class TestOutputValidation:
         assert len(errors) == 0, f"Stage1 output invalid: {errors}"
         print(f"\n✅ Stage1 output format is valid")
 
-    def test_stage2_output_partial_validation(self, stage2_analyzer, stage1_scanner):
+    def test_stage2_output_partial_validation(self, stage2_analyzer, stage1_result_with_intervals):
         """Test that Stage2 output sections are valid"""
-        if not TEST_VIDEO_FAKE.exists():
-            pytest.skip(f"Test video not found: {TEST_VIDEO_FAKE}")
-
-        # Get suspicious interval
-        stage1_result = stage1_scanner.scan_video(
-            video_path=str(TEST_VIDEO_FAKE),
-            threshold=0.6
-        )
-
-        if len(stage1_result["suspicious_intervals"]) == 0:
-            pytest.skip("No suspicious intervals detected")
-
-        interval = stage1_result["suspicious_intervals"][0]
+        interval = stage1_result_with_intervals['interval']
+        extracted_features = stage1_result_with_intervals['extracted_features']
+        
         result = stage2_analyzer.analyze_interval(
             interval=interval,
-            video_path=str(TEST_VIDEO_FAKE)
+            video_path=str(TEST_VIDEO_FAKE),
+            extracted_features=extracted_features
         )
 
         # Manually validate stage2_interval_analysis structure

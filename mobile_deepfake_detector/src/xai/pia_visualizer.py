@@ -23,7 +23,7 @@ import warnings
 warnings.filterwarnings('ignore', category=UserWarning)
 
 
-class XAIVisualizer:
+class PIAVisualizer:
     """
     Visualizer for PIA model XAI results.
 

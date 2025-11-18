@@ -105,7 +105,7 @@ class HybridMMSBAPIA:
         # Stage1 preprocessing config (limited to 30 seconds)
         self.preprocess_config = {
             'target_fps': 30,
-            'max_frames': 900,  # 30 seconds × 30fps = 900 frames max
+            'max_frames': 900,  # 30 seconds * 30fps = 900 frames max
             'frame_size': [224, 224],
             'max_duration': 30,  # Limit to 30 seconds
             'min_duration': 1,   # Allow short clips (for testing)
@@ -476,7 +476,7 @@ class HybridMMSBAPIA:
             timestamps=interval_features['timestamps']
         )
 
-        # Resample frames to PIA 14×5 format
+        # Resample frames to PIA 14x5 format
         resampled_frames, matched_phonemes = resample_frames_to_pia_format(
             frames=interval_features['frames'],
             timestamps=interval_features['timestamps'],
@@ -489,7 +489,7 @@ class HybridMMSBAPIA:
         geometry = interval_features['geometry']  # (N, 1)
         arcface = interval_features['arcface']    # (N, 512)
 
-        # Resample geometry and arcface to 14×5
+        # Resample geometry and arcface to 14x5
         resampled_geometry = self._resample_features_to_grid(
             geometry, interval_features['timestamps'], phonemes, 14, 5
         )
@@ -544,7 +544,7 @@ class HybridMMSBAPIA:
         frames_per_phoneme: int = 5
     ) -> np.ndarray:
         """
-        Resample features to PIA 14×5 grid format.
+        Resample features to PIA 14x5 grid format.
 
         Args:
             features: (N, D) - Feature array
@@ -572,7 +572,7 @@ class HybridMMSBAPIA:
                         by_phoneme[phoneme].append(features[frame_idx])
                     break
 
-        # Build 14×5 grid
+        # Build 14x5 grid
         resampled = np.zeros((target_phonemes, frames_per_phoneme, D), dtype=features.dtype)
 
         for pi, phoneme in enumerate(phoneme_vocab):
@@ -691,7 +691,7 @@ class HybridMMSBAPIA:
             }
 
             korean_summary = {
-                'title': f"✓ 실제 영상으로 판정 (신뢰도: {stage1_result['overall_confidence']*100:.1f}%)",
+                'title': f" 실제 영상으로 판정 (신뢰도: {stage1_result['overall_confidence']*100:.1f}%)",
                 'risk_level': 'low',
                 'primary_reason': '의심 구간이 탐지되지 않았습니다.',
                 'suspicious_interval_count': 0,
@@ -765,7 +765,7 @@ class HybridMMSBAPIA:
         Creates a comprehensive 4-panel visualization:
         - Panel 1 (Top-Left): Branch Contribution Bar Chart
         - Panel 2 (Top-Right): Phoneme Attention Distribution
-        - Panel 3 (Bottom-Left): Temporal Attention Heatmap (14 phonemes × 5 frames)
+        - Panel 3 (Bottom-Left): Temporal Attention Heatmap (14 phonemes x 5 frames)
         - Panel 4 (Bottom-Right): Detection Summary with Geometry Analysis
 
         Args:
@@ -816,7 +816,7 @@ class HybridMMSBAPIA:
         visualizer.plot_temporal_heatmap(
             interval_xai,
             ax=ax3,
-            title=f"Temporal Attention Heatmap (14×5)"
+            title=f"Temporal Attention Heatmap (14x5)"
         )
 
         # Panel 4: Detection Summary (Bottom-Right)
@@ -1217,7 +1217,7 @@ class Stage1Scanner:
         Creates a comprehensive 4-panel visualization:
         - Panel 1 (Top-Left): Branch Contribution Bar Chart
         - Panel 2 (Top-Right): Phoneme Attention Distribution
-        - Panel 3 (Bottom-Left): Temporal Attention Heatmap (14 phonemes × 5 frames)
+        - Panel 3 (Bottom-Left): Temporal Attention Heatmap (14 phonemes x 5 frames)
         - Panel 4 (Bottom-Right): Detection Summary with Geometry Analysis
 
         Args:
@@ -1228,7 +1228,7 @@ class Stage1Scanner:
 
         Returns:
             Path to saved visualization PNG
-        """
+        
         logger.info(f"[Stage2] Generating XAI visualization for interval {interval_id}...")
 
         # Import PIAVisualizer
@@ -1270,7 +1270,7 @@ class Stage1Scanner:
         visualizer.plot_temporal_heatmap(
             interval_xai,
             ax=ax3,
-            title=f"Temporal Attention Heatmap (14×5)"
+            title=f"Temporal Attention Heatmap (14x5)"
         )
 
         # Panel 4: Detection Summary (Bottom-Right)
@@ -2119,3 +2119,35 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# ========================================
+# Backward Compatibility: Re-export new modules
+# ========================================
+# For backward compatibility, re-export the new modular classes
+# This allows existing code to continue using:
+#   from src.xai.hybrid_mmms_pia_explainer import HybridXAIPipeline, Stage1Scanner, Stage2Analyzer
+#
+# New recommended imports:
+#   from src.xai.hybrid_pipeline import HybridXAIPipeline
+#   from src.xai.stage1_scanner import Stage1Scanner
+#   from src.xai.stage2_analyzer import Stage2Analyzer
+#   from src.xai.feature_extractor import FeatureExtractor
+#   from src.xai.interval_detector import IntervalDetector
+#   from src.xai.result_aggregator import ResultAggregator
+
+from .hybrid_pipeline import HybridXAIPipeline
+from .stage1_scanner import Stage1Scanner
+from .stage2_analyzer import Stage2Analyzer
+from .feature_extractor import FeatureExtractor
+from .interval_detector import IntervalDetector
+from .result_aggregator import ResultAggregator
+
+__all__ = [
+    "HybridMMSBAPIA",  # Legacy class (deprecated, use HybridXAIPipeline)
+    "HybridXAIPipeline",
+    "Stage1Scanner",
+    "Stage2Analyzer",
+    "FeatureExtractor",
+    "IntervalDetector",
+    "ResultAggregator",
+]
