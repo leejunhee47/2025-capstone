@@ -1,7 +1,11 @@
 package com.capstone.backend.detection.controller;
 
 import com.capstone.backend.core.common.SessionConst;
+import com.capstone.backend.detection.exceptions.InvalidRequestId;
 import com.capstone.backend.detection.model.DetectionRequest;
+import com.capstone.backend.detection.model.DetectionStatus;
+import com.capstone.backend.detection.response.AiResultResponse;
+import com.capstone.backend.detection.response.AnalysisResultResponse;
 import com.capstone.backend.detection.response.DetectionResponse;
 import com.capstone.backend.detection.response.ErrorResponse;
 import com.capstone.backend.detection.service.DetectionService;
@@ -16,6 +20,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import java.io.*;
+
 
 @Slf4j
 @RestController
@@ -36,7 +41,6 @@ public class DetectionController {
     public ResponseEntity<?> processUploadDetectionRequest(@RequestParam("file") MultipartFile file ,
                                                            @RequestParam("callbackUrl") String callbackUrl ,
                                                            @SessionAttribute(value = SessionConst.LOGIN_MEMBER, required = false) Member loginMember){
-
         // 1. 세션 유효성 검사
         if (loginMember == null) {
             ErrorResponse errorResponse = new ErrorResponse(
@@ -68,7 +72,7 @@ public class DetectionController {
 
         // 2. DB 에 요청 저장 및 파일 저장
         DetectionRequest newRequest;
-        File dest; 
+        File dest;
 
         try {
             // 2-1. DB에 먼저 저장
@@ -83,7 +87,6 @@ public class DetectionController {
             file.transferTo(dest);
 
             // 3. 비동기 처리 시작
-            // [수정] 3.1 메소드 이름 변경 (startDetection -> startFileDetection)
             detectionService.startFileDetection(newRequest , dest.getPath());
 
         } catch (Exception e) {
@@ -104,9 +107,11 @@ public class DetectionController {
 
     @PostMapping("/link")
     public ResponseEntity<?> processLinkDetectionRequest(@RequestParam("videoUrl") String videoUrl ,
-                                                           @RequestParam("callbackUrl") String callbackUrl ,
-                                                           @SessionAttribute(value = SessionConst.LOGIN_MEMBER, required = false) Member loginMember){
-        
+                                                         @RequestParam("callbackUrl") String callbackUrl ,
+                                                         @SessionAttribute(value = SessionConst.LOGIN_MEMBER, required = false) Member loginMember){
+
+
+
         // 1. 세션 유효성 검사
         if (loginMember == null) {
             ErrorResponse errorResponse = new ErrorResponse(
@@ -129,7 +134,6 @@ public class DetectionController {
         DetectionRequest newRequest;
         try {
             newRequest = detectionService.saveNewDetectionRequest(loginMember, callbackUrl);
-            // [수정] 3.1 메소드 이름 변경 (startDetection -> startUrlDetection)
             detectionService.startUrlDetection(newRequest , videoUrl);
         } catch (Exception e) {
             ErrorResponse errorResponse = new ErrorResponse(
@@ -146,7 +150,72 @@ public class DetectionController {
         return ResponseEntity.accepted().body(response);
     }
 
-    // ... (private validateAndGetMimeType, isValidCallbackUrl, formatFileSize 메소드는 기존과 동일) ...
+
+
+    @PostMapping("/result")
+    public ResponseEntity<?> getDetectionResult(@RequestBody AiResultResponse aiResultResponse) {
+        String requestId = aiResultResponse.getRequestId();
+        Long fileSize = aiResultResponse.getAnalysisResultResponse().getFileSize();
+
+        log.info("AI 서버로부터 분석 결과 수신 (RequestId: {})", requestId);
+        log.info("AI 서버로부터 분석 결과 (FileSize: {})", fileSize);
+
+        detectionService.updateDetectionStatus(Long.parseLong(requestId),DetectionStatus.COMPLETED);
+        // TODO: 수신한 jsonResultBody (JSON 문자열)를 파싱(ObjectMapper 등)하여 데이터베이스에 저장
+
+        return ResponseEntity.ok().build();
+    }
+
+
+    @PostMapping("/polling")
+    public ResponseEntity<?> passDetectionResult(@RequestParam("requestId") Long requestId){
+
+        try {
+            // 1. Service에서 DetectionRequest 조회
+            DetectionRequest request = detectionService.getDetectionByRequestId(requestId);
+            DetectionStatus status = request.getStatus();
+
+            // 2. 상태에 따라 다른 HTTP Status Code 반환
+            switch (status) {
+                case COMPLETED:
+                    // 완료: 200 OK (성공)
+                    // todo : DB 에서 결과 조회 및 반환
+                    return ResponseEntity.ok(status);
+
+                case PENDING:
+                case PROCESSING:
+                    // 대기중 or 처리중: 202 Accepted (아직 처리 중이므로 클라이언트가 재시도)
+                    return ResponseEntity.status(HttpStatus.ACCEPTED).body(status);
+
+                case FAILED:
+                    // 실패: 500 Internal Server Error (서버 처리 중 오류 발생)
+                    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(status);
+
+                default:
+                    // 혹시 모를 예외 상태
+                    log.warn("Unknown detection status encountered: {}", status);
+                    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Unknown status");
+            }
+
+        } catch (InvalidRequestId e) {
+            // ID를 찾지 못한 경우 (Service에서 발생시킨 예외): 404 Not Found
+            log.warn("Polling request for non-existent ID: {}", requestId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(e.getMessage());
+
+        } catch (Exception e) {
+            // 그 외 알 수 없는 에러: 500 Internal Server Error
+            log.error("Error during polling for requestId: {}", requestId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("An unexpected error occurred.");
+        }
+    }
+
+
+    @GetMapping("/test")
+    public ResponseEntity<?> test() {
+        detectionService.testDetection();
+        return ResponseEntity.ok().build();
+    }
+
     private String validateAndGetMimeType(MultipartFile file) {
         if (file.isEmpty()) { return null; }
         try (InputStream inputStream = file.getInputStream()) {
@@ -156,7 +225,7 @@ public class DetectionController {
             return null;
         }
     }
-    
+
     private boolean isValidCallbackUrl(String callbackUrl) {
         if (callbackUrl == null || callbackUrl.isBlank()) { return false; }
         String[] schemes = {"http", "https"};
@@ -182,7 +251,7 @@ public class DetectionController {
         }
         return true;
     }
-    
+
     private String formatFileSize(long bytes) {
         if (bytes < 1024) return bytes + " B";
         int exp = (int) (Math.log(bytes) / Math.log(1024));
