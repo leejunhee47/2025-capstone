@@ -85,13 +85,20 @@ class Stage1Scanner:
 
     def _load_mmms_model(self, mmms_model_path: str) -> nn.Module:
         """Load MMMS-BA model from checkpoint."""
-        # Use config values where available, otherwise use hardcoded defaults
+        # Use config values - matches evaluate_mmms_ba_test.py
+        model_config = self.config.get('model', {})
+
         model = MMMSBA(
             audio_dim=self.config.get('dataset', {}).get('audio', {}).get('n_mfcc', 40),
-            visual_dim=256,  # Hardcoded from ResNet feature extractor
-            lip_dim=128,     # Hardcoded from lip ROI feature extractor
-            gru_hidden_dim=self.config.get('model', {}).get('gru', {}).get('hidden_size', 300),
-            dense_hidden_dim=self.config.get('model', {}).get('dense', {}).get('hidden_size', 100)
+            visual_dim=256,  # From feature extractor
+            lip_dim=128,     # From feature extractor
+            gru_hidden_dim=model_config.get('gru', {}).get('hidden_size', 300),
+            gru_num_layers=model_config.get('gru', {}).get('num_layers', 3),
+            gru_dropout=model_config.get('gru', {}).get('dropout', 0.3),
+            dense_hidden_dim=model_config.get('dense', {}).get('hidden_size', 100),
+            dense_dropout=model_config.get('dense', {}).get('dropout', 0.5),
+            attention_type=model_config.get('attention', {}).get('type', 'bimodal'),
+            num_classes=model_config.get('num_classes', 2)
         ).to(self.device)
 
         checkpoint = torch.load(mmms_model_path, map_location=self.device)
@@ -103,23 +110,125 @@ class Stage1Scanner:
         model.eval()
         return model
 
+    def _load_from_npz(
+        self,
+        npz_path: str,
+        target_fps: float = 30.0
+    ) -> Dict[str, Any]:
+        """
+        Load preprocessed features from npz file.
+
+        Args:
+            npz_path: Path to preprocessed .npz file
+            target_fps: Target FPS for downsampling (default: 10.0)
+
+        Returns:
+            features: Dict containing:
+                - 'frames': np.ndarray (T, 224, 224, 3) [0, 1]
+                - 'audio': np.ndarray (T_audio, 40)
+                - 'lip': np.ndarray (T, 112, 112, 3) [0, 1]
+                - 'geometry': np.ndarray (T, 1) - MAR features
+                - 'arcface': np.ndarray (T, 512) - ArcFace embeddings
+                - 'phoneme_labels': np.ndarray (T,) - Phoneme labels (object array)
+                - 'timestamps': np.ndarray (T,)
+                - 'fps': float
+                - 'total_frames': int
+                - 'video_id': str
+                - 'video_path': str (npz_path)
+        """
+        logger.info(f"Loading preprocessed features from: {npz_path}")
+
+        # Load npz file
+        data = np.load(npz_path, allow_pickle=True)  # allow_pickle for phoneme_labels (object array)
+
+        # Extract arrays
+        frames = data['frames']  # (50, 224, 224, 3) uint8 [0, 255]
+        audio = data['audio']    # (3125, 40) float32
+        lip = data['lip']        # (50, 112, 112, 3) uint8 [0, 255]
+        geometry = data['geometry']  # (50, 1) float32 - MAR features
+        arcface = data['arcface']    # (50, 512) float32 - ArcFace embeddings
+        phoneme_labels = data['phoneme_labels']  # (50,) object - Phoneme labels
+        video_id = str(data['video_id'])
+
+        # Load timestamps from npz if available, otherwise compute
+        if 'timestamps' in data:
+            timestamps_from_npz = data['timestamps']
+            original_fps = 30.0  # Default fps for preprocessed data
+        else:
+            # Fallback: compute timestamps
+            original_fps = 30.0
+            timestamps_from_npz = np.arange(frames.shape[0], dtype=np.float32) / original_fps
+
+        # Normalize frames and lip to [0, 1]
+        frames = frames.astype(np.float32) / 255.0
+        lip = lip.astype(np.float32) / 255.0
+
+        # Note: lip is (112, 112) - mmms-ba_fulldata_best.pth is trained on this size
+
+        original_total_frames = frames.shape[0]
+        timestamps = timestamps_from_npz
+        total_frames = original_total_frames
+        fps = original_fps
+
+        # Downsample to target FPS if needed
+        if target_fps < fps:
+            downsample_step = max(1, int(fps / target_fps))
+            logger.info(f"  Downsampling from {fps:.1f}fps to {target_fps}fps (step={downsample_step})")
+
+            # Select frames at uniform intervals
+            selected_indices = np.arange(0, original_total_frames, downsample_step)
+            frames = frames[selected_indices]
+            lip = lip[selected_indices]
+            geometry = geometry[selected_indices]  # Downsample geometry
+            arcface = arcface[selected_indices]    # Downsample arcface
+            phoneme_labels = phoneme_labels[selected_indices]  # Downsample phoneme_labels
+            timestamps = timestamps[selected_indices]  # Keep original timestamps!
+            # Audio stays the same (covers full timeline)
+
+            total_frames = frames.shape[0]
+            fps = target_fps
+
+            logger.info(f"  Downsampled to {total_frames} frames")
+
+        logger.info(f"  Loaded {total_frames} frames from npz (with geometry/arcface/phoneme features)")
+
+        return {
+            'frames': frames,
+            'audio': audio,
+            'lip': lip,
+            'geometry': geometry,        # NEW: MAR features
+            'arcface': arcface,          # NEW: ArcFace embeddings
+            'phoneme_labels': phoneme_labels,  # NEW: Phoneme labels
+            'timestamps': timestamps,
+            'fps': fps,
+            'total_frames': total_frames,
+            'video_id': video_id,
+            'video_path': npz_path
+        }
+
     def scan_video(
         self,
         video_path: str,
         threshold: float = 0.6,
         min_interval_frames: int = 14,
         merge_gap_sec: float = 1.0,
-        output_dir: Optional[str] = None
+        output_dir: Optional[str] = None,
+        use_preprocessed: bool = None,
+        target_fps: float = 10.0
     ) -> Dict[str, Any]:
         """
-        Run MMMS-BA temporal scan on video.
+        Run MMMS-BA temporal scan on video or preprocessed npz file.
 
         Args:
-            video_path: Path to raw video file (NOT NPZ)
+            video_path: Path to video file (.mp4, .avi) OR preprocessed .npz file
             threshold: Fake probability threshold for suspicious frames
             min_interval_frames: Minimum frames per interval (PIA needs 14+)
             merge_gap_sec: Gap in seconds to merge nearby intervals
             output_dir: Optional directory to save visualization
+            use_preprocessed: Whether to load from preprocessed npz file.
+                             If None, auto-detects based on file extension (.npz).
+            target_fps: Target FPS for downsampling raw video (default: 10.0)
+                       Only applies to raw video mode (use_preprocessed=False)
 
         Returns:
             stage1_timeline: Dict matching hybrid_xai_interface.ts format
@@ -133,8 +242,17 @@ class Stage1Scanner:
         """
         logger.info(f"[Stage1Scanner] Scanning video: {video_path}")
 
-        # Step 1: Extract features
-        features = self.feature_extractor.extract_features(video_path, target_fps=10.0)
+        # Auto-detect preprocessed mode based on file extension
+        if use_preprocessed is None:
+            use_preprocessed = video_path.endswith('.npz')
+
+        # Step 1: Extract features (from npz or raw video)
+        if use_preprocessed:
+            logger.info("  Using preprocessed npz file (fast mode)")
+            features = self._load_from_npz(video_path, target_fps=10.0)
+        else:
+            logger.info("  Extracting features from raw video (slow mode)")
+            features = self.feature_extractor.extract_features(video_path, target_fps=target_fps)
 
         # Step 2: Run MMMS-BA frame-level prediction
         logger.info(f"  Running frame-level prediction on {features['total_frames']} frames...")
@@ -175,13 +293,60 @@ class Stage1Scanner:
             'video_id': features['video_id']
         }
 
+        # Add geometry/arcface/phoneme_labels if available (from preprocessed npz)
+        if 'geometry' in features:
+            stage1_result['geometry'] = features['geometry']
+        if 'arcface' in features:
+            stage1_result['arcface'] = features['arcface']
+        if 'phoneme_labels' in features:
+            stage1_result['phoneme_labels'] = features['phoneme_labels']
+
         # Step 4: Group consecutive frames into intervals
         suspicious_intervals_raw = group_consecutive_frames(
             suspicious_indices=suspicious_indices,
             fps=features['fps'],
             min_interval_frames=min_interval_frames,
-            merge_gap_sec=merge_gap_sec
+            merge_gap_sec=merge_gap_sec,
+            timestamps=features['timestamps']  # FIX: Use actual timestamps for accurate time calculation
         )
+
+        # Step 4.5: Full feature extraction for raw video (always for accurate phoneme alignment)
+        num_intervals = len(suspicious_intervals_raw)
+        has_precomputed = (
+            'geometry' in stage1_result and
+            'arcface' in stage1_result and
+            'phoneme_labels' in stage1_result
+        )
+
+        if not has_precomputed and not use_preprocessed:
+            # Raw video mode → Extract geometry/arcface only (MMMS-BA doesn't need phonemes)
+            # Stage2 will extract phonemes per interval with 30fps optimization
+            logger.info(f"  [RAW VIDEO MODE] Extracting geometry/arcface for full video...")
+            logger.info(f"  [OPTIMIZATION] Skipping phoneme extraction (MMMS-BA doesn't need it)")
+
+            try:
+                geometry, arcface, phoneme_labels = self._extract_full_features(
+                    frames=stage1_result['frames'],
+                    video_path=video_path,
+                    timestamps=stage1_result['timestamps'],
+                    fps=stage1_result['fps'],
+                    skip_phonemes=True  # 🔑 MMMS-BA doesn't need phonemes (~10s saved)
+                )
+
+                # Add to stage1_result for Stage2 reuse
+                stage1_result['geometry'] = geometry
+                stage1_result['arcface'] = arcface
+                # Note: phoneme_labels is None when skip_phonemes=True
+                # Stage2 will extract phonemes per interval with 30fps optimization
+
+                logger.info(f"  ✓ Geometry/ArcFace extracted → Stage2 will extract phonemes per interval")
+            except Exception as e:
+                logger.warning(f"  Full feature extraction failed: {e}")
+                logger.warning(f"  Stage2 will extract features per interval")
+        elif has_precomputed:
+            logger.info(f"  [NPZ MODE] Precomputed features available → Stage2 will slice by interval")
+        else:
+            logger.info(f"  WARNING: No features available - Stage2 will extract per interval")
 
         # Step 5: Convert to TypeScript interface format
         stage1_timeline = self._format_stage1_timeline(
@@ -198,8 +363,18 @@ class Stage1Scanner:
             'fps': stage1_result['fps'],
             'total_frames': stage1_result['total_frames'],
             'timestamps': stage1_result['timestamps'],
-            'video_path': stage1_result['video_path']
+            'video_path': stage1_result['video_path'],
+            'fake_probs': stage1_result['fake_probs'],  # For visualization only (not in JSON output)
+            'threshold': threshold  # For visualization
         }
+
+        # Add geometry/arcface/phoneme_labels if available (for Stage2 reuse)
+        if 'geometry' in stage1_result:
+            stage1_timeline['extracted_features']['geometry'] = stage1_result['geometry']
+        if 'arcface' in stage1_result:
+            stage1_timeline['extracted_features']['arcface'] = stage1_result['arcface']
+        if 'phoneme_labels' in stage1_result:
+            stage1_timeline['extracted_features']['phoneme_labels'] = stage1_result['phoneme_labels']
 
         # Step 7: Generate visualization if requested (after extracted_features is added)
         if output_dir:
@@ -211,10 +386,84 @@ class Stage1Scanner:
             stage1_timeline['visualization']['timeline_plot_url'] = viz_path
 
         logger.info(f"[Stage1Scanner] Scan complete!")
-        logger.info(f"  Total frames: {len(stage1_timeline['frame_probabilities'])}")
+        logger.info(f"  Total frames: {stage1_timeline['statistics']['total_frames']}")
         logger.info(f"  Suspicious intervals: {len(stage1_timeline['suspicious_intervals'])}")
 
         return stage1_timeline
+
+    def _extract_full_features(
+        self,
+        frames: np.ndarray,
+        video_path: str,
+        timestamps: np.ndarray,
+        fps: float,
+        skip_phonemes: bool = False
+    ) -> tuple:
+        """
+        Extract geometry/arcface/phoneme for all frames.
+
+        Called when many suspicious intervals detected (3+) for optimization.
+
+        Args:
+            frames: (T, 224, 224, 3) RGB [0, 1]
+            video_path: Video file path
+            timestamps: (T,) timestamps in seconds
+            fps: Video FPS
+            skip_phonemes: If True, skip phoneme extraction (MMMS-BA doesn't need it)
+
+        Returns:
+            geometry: (T, 1) MAR features
+            arcface: (T, 512) ArcFace embeddings
+            phoneme_labels: (T,) object array or None if skip_phonemes=True
+        """
+        from ..utils.feature_extraction_utils import extract_features_optimized, initialize_extractors
+
+        logger.info(f"    Initializing extractors...")
+
+        # Initialize extractors once
+        extractors = initialize_extractors(device=str(self.device))
+
+        # Prepare frames: 224×224 RGB → 384×384 BGR uint8 for extractors
+        logger.info(f"    Preparing {frames.shape[0]} frames for extraction...")
+        frames_bgr_384 = []
+        for frame in frames:
+            frame_uint8 = (frame * 255).astype(np.uint8)
+            frame_bgr = cv2.cvtColor(frame_uint8, cv2.COLOR_RGB2BGR)
+            frame_384 = cv2.resize(frame_bgr, (384, 384))
+            frames_bgr_384.append(frame_384)
+
+        # Config for audio
+        config = {
+            'sample_rate': 16000,
+            'n_mfcc': 40,
+            'hop_length': 512,
+            'n_fft': 2048
+        }
+
+        # Extract features
+        if skip_phonemes:
+            logger.info(f"    [OPTIMIZATION] Extracting MAR/ArcFace only (MMMS-BA doesn't need phonemes)...")
+        else:
+            logger.info(f"    Extracting MAR/ArcFace/Phoneme...")
+
+        geometry, audio_mfcc, arcface, phoneme_labels, audio_wav_path = extract_features_optimized(
+            frames_bgr=frames_bgr_384,
+            video_path=video_path,
+            timestamps=timestamps,
+            fps=fps,
+            config=config,
+            max_duration=60,
+            extractors=extractors,
+            extract_phonemes=not skip_phonemes,  # 🔑 Skip phoneme if MMMS-BA
+            logger=logger
+        )
+
+        # Cleanup WAV file
+        from pathlib import Path as P
+        if audio_wav_path and P(audio_wav_path).exists():
+            P(audio_wav_path).unlink()
+
+        return geometry, arcface, phoneme_labels
 
     def _predict_frame_level(
         self,
@@ -228,9 +477,9 @@ class Stage1Scanner:
         Uses the model's built-in frame_level parameter for efficient GPU utilization.
 
         Args:
-            frames: (T, 224, 224, 3) numpy array
+            frames: (T, 224, 224, 3) numpy array [0, 1]
             audio: (T_audio, 40) numpy array
-            lip: (T, 96, 96, 3) numpy array
+            lip: (T, H, W, 3) numpy array [0, 1] - Accepts 96x96 or 112x112
 
         Returns:
             fake_probs: (T,) array of fake probabilities
@@ -315,14 +564,17 @@ class Stage1Scanner:
         Returns:
             timeline_plot_url: Path to saved PNG file
         """
-        # Extract data
-        frame_probs = stage1_timeline['frame_probabilities']
+        # Extract data from extracted_features (frame_probabilities removed for JSON size reduction)
+        extracted_features = stage1_timeline.get('extracted_features', {})
+        if 'fake_probs' not in extracted_features:
+            raise ValueError("fake_probs not found in extracted_features. Make sure scan_video() was called first.")
+
+        timestamps = extracted_features['timestamps']
+        fake_probs = extracted_features['fake_probs']
+        threshold = extracted_features['threshold']
+
         suspicious_intervals = stage1_timeline['suspicious_intervals']
         stats = stage1_timeline['statistics']
-
-        timestamps = np.array([fp['timestamp_sec'] for fp in frame_probs])
-        fake_probs = np.array([fp['fake_probability'] for fp in frame_probs])
-        threshold = stats['threshold_used']
 
         # Get frames from extracted_features in stage1_timeline
         extracted_features = stage1_timeline.get('extracted_features', {})

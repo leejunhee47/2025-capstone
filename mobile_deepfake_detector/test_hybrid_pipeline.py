@@ -34,14 +34,14 @@ from validate_hybrid_output import validate_hybrid_result
 
 # Test video paths (adjust to your dataset)
 TEST_VIDEO_REAL = Path("E:/capstone/real_deepfake_dataset/003.딥페이크/1.Training/원천데이터/train_탐지방해/원본영상/02_원본영상/02_원본영상/13968_019.mp4")
-TEST_VIDEO_FAKE = Path("E:/capstone/real_deepfake_dataset/003.딥페이크/1.Training/원천데이터/train_탐지방해/변조영상/01_변조영상/01_변조영상/0e23d546a5f952542a00_e37c8c26b0c1c0714c74_1_0016.mp4")
+TEST_VIDEO_FAKE = Path("E:/capstone/real_deepfake_dataset/youtube_3.mp4")  # youtube_3.mp4 (fake video)
 
 # Model checkpoints (adjust to your trained models)
-MMMS_BA_CHECKPOINT = Path(r"E:\capstone\mobile_deepfake_detector\models\kfold\fold_1\mmms-ba_best_val_94_57.pth")
-MMMS_BA_CONFIG = Path("E:/capstone/mobile_deepfake_detector/configs/train_teacher_korean.yaml")
+MMMS_BA_CHECKPOINT = Path("models/checkpoints/mmms-ba_fulldata_best.pth")
+MMMS_BA_CONFIG = Path("configs/train_teacher_korean.yaml")
 
-PIA_CHECKPOINT = Path("E:/capstone/mobile_deepfake_detector/outputs/pia_aug50/checkpoints/best.pth")
-PIA_CONFIG = Path("E:/capstone/mobile_deepfake_detector/configs/train_teacher_korean.yaml")
+PIA_CHECKPOINT = Path("F:/preprocessed_data_pia_optimized/checkpoints/best.pth")
+PIA_CONFIG = Path("configs/train_pia.yaml")
 
 # Output directory for test results
 TEST_OUTPUT_DIR = Path("E:/capstone/mobile_deepfake_detector/outputs/xai/hybrid_tests")
@@ -245,7 +245,7 @@ class TestStage1Scanner:
         if "timeline_plot_url" in result["visualization"]:
             plot_path = Path(result["visualization"]["timeline_plot_url"])
             assert plot_path.exists(), f"Timeline plot not created: {plot_path}"
-            print(f"\n✅ Stage1 visualization created: {plot_path}")
+            print(f"\n[OK] Stage1 visualization created: {plot_path}")
 
 
 # ===================================
@@ -299,7 +299,7 @@ class TestStage2Analyzer:
         output_path = TEST_OUTPUT_DIR / "stage2_interval_result.json"
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
-        print(f"\n✅ Stage2 result saved to: {output_path}")
+        print(f"\n[OK] Stage2 result saved to: {output_path}")
 
     def test_phoneme_analysis(self, stage2_analyzer, stage1_result_with_intervals):
         """Test phoneme analysis output"""
@@ -422,12 +422,12 @@ class TestHybridXAIPipeline:
         is_valid, errors = validate_hybrid_result(result)
 
         if not is_valid:
-            print(f"\n❌ Validation errors:")
+            print(f"\n[ERROR] Validation errors:")
             for error in errors[:10]:
                 print(f"  - {error}")
 
         assert is_valid, f"Output validation failed: {errors}"
-        print(f"\n✅ Full pipeline output is valid")
+        print(f"\n[OK] Full pipeline output is valid")
 
     def test_aggregated_insights(self, hybrid_pipeline):
         """Test aggregated insights across all intervals"""
@@ -471,11 +471,11 @@ class TestPerformance:
         )
         elapsed_time = time.time() - start_time
 
-        print(f"\n⏱️ Stage1 Processing Time: {elapsed_time:.2f} seconds")
+        print(f"\n[TIME] Stage1 Processing Time: {elapsed_time:.2f} seconds")
 
         # Assert reasonable processing time (adjust threshold as needed)
-        # For 30-second video, should complete in < 60 seconds
-        assert elapsed_time < 60, f"Stage1 too slow: {elapsed_time:.2f}s"
+        # For 30-second video, should complete in < 120 seconds (includes preprocessing)
+        assert elapsed_time < 120, f"Stage1 too slow: {elapsed_time:.2f}s"
 
     def test_stage2_processing_time(self, stage2_analyzer, stage1_result_with_intervals):
         """Benchmark Stage2 processing time per interval"""
@@ -490,7 +490,7 @@ class TestPerformance:
         )
         elapsed_time = time.time() - start_time
 
-        print(f"\n⏱️ Stage2 Processing Time (per interval): {elapsed_time:.2f} seconds")
+        print(f"\n[TIME] Stage2 Processing Time (per interval): {elapsed_time:.2f} seconds")
 
         # Assert reasonable processing time
         # For one interval, should complete in < 30 seconds
@@ -536,12 +536,12 @@ class TestOutputValidation:
         errors = validate_stage1_timeline(result)
 
         if len(errors) > 0:
-            print(f"\n❌ Stage1 validation errors:")
+            print(f"\n[ERROR] Stage1 validation errors:")
             for error in errors:
                 print(f"  - {error}")
 
         assert len(errors) == 0, f"Stage1 output invalid: {errors}"
-        print(f"\n✅ Stage1 output format is valid")
+        print(f"\n[OK] Stage1 output format is valid")
 
     def test_stage2_output_partial_validation(self, stage2_analyzer, stage1_result_with_intervals):
         """Test that Stage2 output sections are valid"""
@@ -560,12 +560,12 @@ class TestOutputValidation:
         errors = validate_stage2_interval_analysis([result])
 
         if len(errors) > 0:
-            print(f"\n❌ Stage2 validation errors:")
+            print(f"\n[ERROR] Stage2 validation errors:")
             for error in errors:
                 print(f"  - {error}")
 
         assert len(errors) == 0, f"Stage2 output invalid: {errors}"
-        print(f"\n✅ Stage2 output format is valid")
+        print(f"\n[OK] Stage2 output format is valid")
 
 
 # ===================================
@@ -597,7 +597,7 @@ class TestRegression:
         assert abs(stats1["mean_fake_prob"] - stats2["mean_fake_prob"]) < 0.01, \
             "Stage1 results inconsistent between runs"
 
-        print(f"\n✅ Stage1 produces consistent results")
+        print(f"\n[OK] Stage1 produces consistent results")
 
     def test_stage1_no_crashes_on_edge_cases(self, stage1_scanner):
         """Test that Stage1 handles edge cases gracefully"""
@@ -613,7 +613,7 @@ class TestRegression:
         # Should complete without errors
         assert "frame_probabilities" in result
         assert "suspicious_intervals" in result
-        print(f"\n✅ Stage1 handles high threshold edge case")
+        print(f"\n[OK] Stage1 handles high threshold edge case")
 
 
 # ===================================

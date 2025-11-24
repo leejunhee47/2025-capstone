@@ -13,7 +13,7 @@ import cv2
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import logging
 
 # Setup logger
@@ -169,26 +169,37 @@ class ResultAggregator:
         Returns:
             detection: Dict with verdict, confidence, probabilities, frame counts
         """
-        # Method 1: Stage1 suspicious frame ratio
-        total_frames = len(stage1_timeline['frame_probabilities'])
-        suspicious_frames = [fp for fp in stage1_timeline['frame_probabilities'] if fp['is_suspicious']]
-        suspicious_frame_count = len(suspicious_frames)
-        suspicious_frame_ratio = (suspicious_frame_count / total_frames) * 100 if total_frames > 0 else 0.0
+        # Method 1: Stage1 confidence from suspicious intervals
+        # Get from statistics (frame_probabilities removed for JSON size reduction)
+        stats = stage1_timeline['statistics']
+        total_frames = stats['total_frames']
+        suspicious_frame_count = stats['suspicious_frame_count']
+        suspicious_frame_ratio = stats['suspicious_frame_ratio']
 
-        # Calculate suspicious ratio as 0.0-1.0
-        suspicious_ratio_score = suspicious_frame_count / total_frames if total_frames > 0 else 0.0
+        # Use max interval mean_fake_prob as Stage1 confidence (more reliable than frame count ratio)
+        # This better reflects the actual model confidence rather than just counting frames above threshold
+        suspicious_intervals = stage1_timeline.get('suspicious_intervals', [])
+        if len(suspicious_intervals) > 0:
+            # Use highest confidence interval as Stage1 score
+            stage1_score = max([interval['mean_fake_prob'] for interval in suspicious_intervals])
+        else:
+            # No intervals detected - use overall mean fake probability
+            stage1_score = stage1_timeline['statistics']['mean_fake_prob']
 
         # Method 2: Stage2 PIA confidence average (if available)
         if len(stage2_results) > 0:
             pia_fake_confidences = [r['prediction']['probabilities']['fake'] for r in stage2_results]
             pia_avg_confidence = float(np.mean(pia_fake_confidences))
         else:
-            # No intervals analyzed - use Stage1 mean fake probability
-            pia_avg_confidence = stage1_timeline['statistics']['mean_fake_prob']
+            # No intervals analyzed - use Stage1 score
+            pia_avg_confidence = stage1_score
 
         # Combined score (weighted combination)
-        # 60% weight on Stage1 suspicious ratio, 40% on Stage2 PIA confidence
-        combined_score = 0.6 * suspicious_ratio_score + 0.4 * pia_avg_confidence
+        # 80% weight on Stage1 max interval confidence, 20% on Stage2 PIA confidence
+        # Stage1 score now uses mean_fake_prob (actual confidence) instead of frame count ratio
+        # Increased Stage1 weight to 80% due to Stage2 false negatives from limited phoneme coverage
+        # This better handles cases where PIA sees only partial context (e.g., 30 valid frames from 193)
+        combined_score = 0.8 * stage1_score + 0.2 * pia_avg_confidence
 
         # Final verdict (threshold: 0.5)
         verdict = 'fake' if combined_score > 0.5 else 'real'
@@ -211,7 +222,9 @@ class ResultAggregator:
         self,
         detection: Dict[str, Any],
         aggregated: Dict[str, Any],
-        stage1_timeline: Dict[str, Any]
+        stage1_timeline: Dict[str, Any],
+        stage2_interval_analysis: List[Dict[str, Any]] = None,
+        video_info: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """
         Generate user-friendly Korean summary.
@@ -220,15 +233,20 @@ class ResultAggregator:
             detection: Overall detection result
             aggregated: Aggregated insights
             stage1_timeline: Stage1 timeline
+            stage2_interval_analysis: List of Stage2 interval results (optional)
+            video_info: Video metadata (optional)
 
         Returns:
-            summary: Dict with title, risk_level, primary_reason, etc.
+            summary: Dict with title, risk_level, primary_reason, detail_view, etc.
         """
+        if stage2_interval_analysis is None:
+            stage2_interval_analysis = []
+
         confidence = detection['confidence']
         verdict = detection['verdict']
 
-        # Risk level mapping
-        risk_level = self._compute_risk_level(confidence)
+        # Risk level mapping (verdict-aware)
+        risk_level = self._compute_risk_level(confidence, verdict)
 
         # Title
         if verdict == 'fake':
@@ -265,25 +283,52 @@ class ResultAggregator:
             suspicious_intervals=suspicious_intervals
         )
 
+        # NEW: Add detail_view structure for mobile app
+        detail_view = self._build_detail_view(
+            detection=detection,
+            stage1_timeline=stage1_timeline,
+            stage2_interval_analysis=stage2_interval_analysis,
+            video_info=video_info
+        )
+
         return {
             'title': title,
             'risk_level': risk_level,
             'primary_reason': primary_reason,
             'suspicious_interval_count': len(suspicious_intervals),
             'top_suspicious_phonemes': [p['phoneme'] for p in top_phonemes[:3]],
-            'detailed_explanation': detailed_explanation
+            'detailed_explanation': detailed_explanation,
+            'detail_view': detail_view  # NEW
         }
 
-    def _compute_risk_level(self, confidence: float) -> str:
-        """Compute risk level from confidence score."""
-        if confidence > 0.9:
-            return 'critical'
-        elif confidence > 0.8:
-            return 'high'
-        elif confidence > 0.65:
-            return 'medium'
+    def _compute_risk_level(self, confidence: float, verdict: str) -> str:
+        """
+        Compute risk level from confidence score and verdict.
+
+        Args:
+            confidence: Combined confidence score (0.0-1.0)
+            verdict: Detection verdict ('fake' or 'real')
+
+        Returns:
+            risk_level: 'low' | 'medium' | 'high' | 'critical'
+        """
+        if verdict == 'fake':
+            # Fake 판정인 경우: confidence가 높을수록 risk 높음
+            if confidence > 0.85:
+                return 'critical'
+            elif confidence > 0.7:
+                return 'high'
+            elif confidence > 0.5:  # Detection threshold와 일치
+                return 'medium'
+            else:
+                return 'low'  # Should not happen (fake verdict requires >0.5 confidence)
         else:
-            return 'low'
+            # Real 판정인 경우: fake score가 높을수록 (real confidence 낮을수록) risk 높음
+            fake_score = 1.0 - confidence
+            if fake_score > 0.4:  # Real confidence < 0.6 (애매한 경우)
+                return 'medium'
+            else:
+                return 'low'
 
     def _build_detailed_explanation(
         self,
@@ -314,6 +359,116 @@ class ResultAggregator:
             explanation = explanation[:197] + "..."
 
         return explanation
+
+    def _build_detail_view(
+        self,
+        detection: Dict[str, Any],
+        stage1_timeline: Dict[str, Any],
+        stage2_interval_analysis: List[Dict[str, Any]],
+        video_info: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Build detail_view structure for mobile app display.
+
+        Args:
+            detection: Overall detection result
+            stage1_timeline: Stage1 timeline
+            stage2_interval_analysis: List of Stage2 interval results
+            video_info: Video metadata
+
+        Returns:
+            detail_view: Structured data for mobile UI
+        """
+        key_findings = []
+
+        # Extract key findings from stage2_interval_analysis
+        for interval_analysis in stage2_interval_analysis:
+            # Phoneme anomaly
+            phoneme_analysis = interval_analysis.get('phoneme_analysis', {})
+            top_phoneme = phoneme_analysis.get('top_phoneme', '')
+
+            if top_phoneme and top_phoneme != '<pad>':
+                phoneme_scores = phoneme_analysis.get('phoneme_scores', [])
+                if phoneme_scores:
+                    top_score = phoneme_scores[0]
+                    key_findings.append({
+                        'type': 'phoneme_anomaly',
+                        'icon': '🗣️',
+                        'title': '발음-입모양 불일치',
+                        'description': f"'{top_phoneme}' 발음 시 입 움직임 부자연스러움",
+                        'severity': 'high',
+                        'intervals': [interval_analysis['interval_id']]
+                    })
+
+            # Geometry anomaly (MAR)
+            geometry_analysis = interval_analysis.get('geometry_analysis', {})
+            statistics = geometry_analysis.get('statistics', {})
+            mean_mar = statistics.get('mean_mar', 0)
+
+            if mean_mar > 0:
+                key_findings.append({
+                    'type': 'geometry_anomaly',
+                    'icon': '👄',
+                    'title': '입 움직임 이상',
+                    'description': f"MAR 값 평균: {mean_mar:.3f}",
+                    'severity': 'medium',
+                    'intervals': [interval_analysis['interval_id']]
+                })
+
+            # Visual branch dominance
+            branch_contributions = interval_analysis.get('branch_contributions', {})
+            top_branch = branch_contributions.get('top_branch', '')
+
+            if top_branch == 'visual':
+                visual_contrib = branch_contributions.get('visual', {})
+                if isinstance(visual_contrib, dict):
+                    contrib_pct = visual_contrib.get('contribution_percent', 0)
+                else:
+                    contrib_pct = visual_contrib
+
+                key_findings.append({
+                    'type': 'visual_artifact',
+                    'icon': '👁️',
+                    'title': '시각적 단서 감지',
+                    'description': f"Visual 브랜치 {contrib_pct:.1f}% 기여",
+                    'severity': 'high',
+                    'intervals': [interval_analysis['interval_id']]
+                })
+
+        # Calculate timeline summary
+        suspicious_intervals = stage1_timeline.get('suspicious_intervals', [])
+        total_duration_sec = video_info.get('duration_sec', 0) if video_info else 0
+        suspicious_duration_sec = sum(
+            interval.get('duration_sec', 0)
+            for interval in suspicious_intervals
+        )
+        suspicious_percentage = stage1_timeline.get('statistics', {}).get('mean_fake_prob', 0) * 100
+
+        timeline_summary = {
+            'total_duration_sec': float(total_duration_sec),
+            'suspicious_duration_sec': float(suspicious_duration_sec),
+            'suspicious_percentage': float(suspicious_percentage)
+        }
+
+        # Calculate confidence breakdown
+        stage1_confidence = stage1_timeline.get('statistics', {}).get('mean_fake_prob', 0)
+        stage2_confidence = (
+            np.mean([interval.get('prediction', {}).get('confidence', 0)
+                    for interval in stage2_interval_analysis])
+            if stage2_interval_analysis else 0.0
+        )
+
+        confidence_breakdown = {
+            'stage1_confidence': float(stage1_confidence),
+            'stage2_confidence': float(stage2_confidence),
+            'combined_confidence': float(detection['confidence'])
+        }
+
+        return {
+            'key_findings': key_findings,
+            'timeline_summary': timeline_summary,
+            'confidence_breakdown': confidence_breakdown
+        }
 
     def extract_video_info(self, video_path: str) -> Dict[str, Any]:
         """Extract video metadata."""
@@ -346,7 +501,8 @@ class ResultAggregator:
         video_info: Dict[str, Any],
         processing_time_ms: float,
         mmms_model_path: str,
-        pia_model_path: str
+        pia_model_path: str,
+        thumbnail_path: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Assemble final HybridDeepfakeXAIResult matching hybrid_xai_interface.ts.
@@ -364,6 +520,7 @@ class ResultAggregator:
             processing_time_ms: Processing time in milliseconds
             mmms_model_path: Path to MMMS-BA model
             pia_model_path: Path to PIA model
+            thumbnail_path: Path to generated thumbnail PNG (optional)
 
         Returns:
             Complete result with all 9 sections
@@ -380,27 +537,11 @@ class ResultAggregator:
             'pipeline_version': 'hybrid_v1.0'
         }
 
-        # Model info
-        model_info = {
-            'mmms_ba': {
-                'name': 'MMMS-BA Teacher',
-                'checkpoint': mmms_model_path,
-                'training_accuracy': 0.9771,
-                'stage': 'stage1_scanner'
-            },
-            'pia': {
-                'name': 'PIA v1.0',
-                'checkpoint': pia_model_path,
-                'training_accuracy': 0.9771,
-                'stage': 'stage2_analyzer',
-                'supported_phonemes': 14,
-                'xai_methods': ['branch_contribution', 'phoneme_attention', 'temporal_heatmap', 'mar_analysis']
-            },
-            'pipeline': {
-                'version': 'hybrid_v1.0',
-                'threshold': 0.6,
-                'resampling_strategy': 'uniform'
-            }
+        # SIMPLIFIED: model_version (removed checkpoint paths and excess metadata)
+        model_version = {
+            'pipeline': 'hybrid_v1.0',
+            'mmms_ba': 'v1.0',
+            'pia': 'v1.0'
         }
 
         # Output file paths
@@ -414,6 +555,24 @@ class ResultAggregator:
             'combined_summary': str(Path(output_dir) / "summary.png")
         }
 
+        # Add thumbnails section
+        thumbnails = {}
+        if thumbnail_path:
+            thumbnails['detection_card'] = thumbnail_path
+
+        # NEW: Build report structure for mobile app display
+        stage1_png = outputs.get('stage1_timeline', '')
+        stage2_pngs = outputs.get('stage2_intervals', [])
+
+        report = {
+            'format': 'png_pages',
+            'page_count': 2,
+            'pages': [
+                stage1_png,  # Page 1: Timeline
+                stage2_pngs[0] if stage2_pngs else ''  # Page 2: XAI (first interval)
+            ]
+        }
+
         # Assemble complete result
         return {
             'metadata': metadata,
@@ -423,8 +582,10 @@ class ResultAggregator:
             'stage1_timeline': stage1_timeline,
             'stage2_interval_analysis': stage2_interval_analysis,
             'aggregated_insights': aggregated_insights,
-            'model_info': model_info,
-            'outputs': outputs
+            'model_version': model_version,  # CHANGED from model_info
+            'thumbnails': thumbnails,  # NEW
+            'report': report,  # NEW
+            'outputs': outputs  # Keep for backward compatibility
         }
 
     def convert_for_json(self, obj):

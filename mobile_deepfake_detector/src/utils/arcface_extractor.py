@@ -121,17 +121,26 @@ class ArcFaceExtractor:
         self,
         video_path: Union[str, Path],
         max_frames: Optional[int] = None,
+        frame_indices: Optional[List[int]] = None,
         skip_frames: int = 0,
-        show_progress: bool = True
+        show_progress: bool = True,
+        batch_size: int = 32
     ) -> np.ndarray:
         """
-        Extract ArcFace embeddings from all frames in a video.
+        Extract ArcFace embeddings from video frames with batch processing.
 
         Args:
             video_path: Path to input video file
-            max_frames: Maximum number of frames to process (None = all)
+            max_frames: Maximum number of frames to process (None = all, legacy parameter)
+            frame_indices: Specific frame indices to extract (overrides max_frames)
+                - If provided, extracts embeddings only for these frames
+                - Example: [0, 12, 24, 36, ...] for uniform sampling
+                - Ensures synchronization with VideoPreprocessor
             skip_frames: Number of frames to skip between extractions (0 = no skip)
             show_progress: Whether to log progress updates
+            batch_size: Number of frames to load into memory at once (default: 32)
+                - Larger batch = better GPU utilization but more memory
+                - Recommended: 16-64 depending on VRAM availability
 
         Returns:
             Array of shape (num_frames, 512) containing ArcFace embeddings.
@@ -139,8 +148,8 @@ class ArcFaceExtractor:
 
         Example:
             >>> extractor = ArcFaceExtractor(device="cuda")
-            >>> embeddings = extractor.extract_from_video("test.mp4")
-            >>> print(embeddings.shape)  # (150, 512) for 150 frames
+            >>> embeddings = extractor.extract_from_video("test.mp4", frame_indices=[0, 10, 20], batch_size=32)
+            >>> print(embeddings.shape)  # (3, 512) for 3 frames
         """
         video_path = str(video_path)
         if not os.path.exists(video_path):
@@ -151,48 +160,64 @@ class ArcFaceExtractor:
 
         # Open video
         cap = cv2.VideoCapture(video_path)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        total_frames_in_video = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS)
 
-        if max_frames:
-            total_frames = min(total_frames, max_frames)
+        # Determine which frames to extract
+        if frame_indices is not None:
+            # PIA mode: Extract specific frames only (synchronized with VideoPreprocessor)
+            frames_to_extract = sorted(frame_indices)
+            total_frames = len(frames_to_extract)
+            self.logger.info(f"Frame-specific extraction: {total_frames} frames from {frames_to_extract[0]} to {frames_to_extract[-1]}")
+        else:
+            # Legacy mode: All frames or limited by max_frames
+            if max_frames:
+                frames_to_extract = list(range(min(max_frames, total_frames_in_video)))
+                total_frames = len(frames_to_extract)
+            else:
+                frames_to_extract = list(range(total_frames_in_video))
+                total_frames = total_frames_in_video
 
-        self.logger.info(f"Video: {total_frames} frames @ {fps:.2f} FPS")
+        self.logger.info(f"Video: {total_frames} frames @ {fps:.2f} FPS (batch_size={batch_size})")
 
-        # Extract embeddings
+        # ===== Batch Processing =====
+        # Process frames in batches to optimize GPU utilization
         embeddings = []
-        frame_idx = 0
-        processed = 0
+        num_batches = (total_frames + batch_size - 1) // batch_size
 
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
+        for batch_idx in range(num_batches):
+            batch_start = batch_idx * batch_size
+            batch_end = min(batch_start + batch_size, total_frames)
+            batch_frame_indices = frames_to_extract[batch_start:batch_end]
 
-            # Skip frames if requested
-            if skip_frames > 0 and frame_idx % (skip_frames + 1) != 0:
-                frame_idx += 1
-                continue
+            # Step 1: Load all frames in batch into memory (minimize I/O latency)
+            batch_frames = []
+            for frame_idx in batch_frame_indices:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                ret, frame = cap.read()
 
-            # Extract embedding for current frame
-            embedding = self._extract_from_frame(frame)
-            embeddings.append(embedding)
-            processed += 1
+                if ret:
+                    batch_frames.append(frame)
+                else:
+                    batch_frames.append(None)  # Failed frame
 
-            # Progress logging
-            if show_progress and processed % 100 == 0:
+            # Step 2: Process loaded frames consecutively (maximize GPU throughput)
+            for frame in batch_frames:
+                if frame is not None:
+                    embedding = self._extract_from_frame(frame)
+                else:
+                    embedding = np.zeros(512, dtype=np.float32)
+                embeddings.append(embedding)
+
+            # Progress logging per batch
+            if show_progress:
+                processed = batch_end
                 elapsed = time.time() - t0
                 fps_proc = processed / elapsed if elapsed > 0 else 0
                 self.logger.info(
-                    f"Processed {processed}/{total_frames} frames "
+                    f"[Batch {batch_idx+1}/{num_batches}] Processed {processed}/{total_frames} frames "
                     f"({fps_proc:.1f} FPS)"
                 )
-
-            # Check max_frames limit
-            if max_frames and processed >= max_frames:
-                break
-
-            frame_idx += 1
 
         cap.release()
 

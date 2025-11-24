@@ -148,13 +148,19 @@ class HybridMMSBAPIA:
 
     def _load_mmms_model(self, checkpoint_path: str) -> nn.Module:
         """Load MMMS-BA model from checkpoint."""
-        # Use config values where available, otherwise use hardcoded defaults from comments
+        # Load with ALL parameters matching evaluate_mmms_ba_test.py
+        model_config = self.mmms_config['model']
         model = MMMSBA(
-            audio_dim=self.mmms_config.get('dataset', {}).get('audio', {}).get('n_mfcc', 40),
-            visual_dim=256,  # Hardcoded from ResNet feature extractor
-            lip_dim=128,     # Hardcoded from lip ROI feature extractor
-            gru_hidden_dim=self.mmms_config.get('model', {}).get('gru', {}).get('hidden_size', 300),
-            dense_hidden_dim=self.mmms_config.get('model', {}).get('dense', {}).get('hidden_size', 100)
+            audio_dim=self.mmms_config['dataset']['audio']['n_mfcc'],
+            visual_dim=256,  # From feature extractor
+            lip_dim=128,     # From feature extractor
+            gru_hidden_dim=model_config['gru']['hidden_size'],
+            gru_num_layers=model_config['gru']['num_layers'],
+            gru_dropout=model_config['gru']['dropout'],
+            dense_hidden_dim=model_config['dense']['hidden_size'],
+            dense_dropout=model_config['dense']['dropout'],
+            attention_type=model_config['attention']['type'],
+            num_classes=model_config['num_classes']
         ).to(self.device)
 
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
@@ -230,15 +236,15 @@ class HybridMMSBAPIA:
 
         logger.info(f"  Extracted features: {frames.shape[0]} frames")
 
-        # Downsample to 10fps for 3x speedup (30fps → 10fps)
+        # Keep original 30fps (no downsampling for better temporal resolution)
         # Get original FPS from video
         cap_temp = cv2.VideoCapture(str(video_path))
         original_fps = cap_temp.get(cv2.CAP_PROP_FPS) if cap_temp.isOpened() else 30.0
         cap_temp.release()
 
-        target_fps = 10.0
+        target_fps = 30.0
         if original_fps > target_fps:
-            downsample_step = max(1, int(original_fps / target_fps))  # e.g., 30/10 = 3
+            downsample_step = max(1, int(original_fps / target_fps))  
             logger.info(f"  Downsampling from {original_fps:.1f}fps to {target_fps}fps (step={downsample_step})")
 
             frames = frames[::downsample_step]
@@ -1226,7 +1232,7 @@ class Stage1Scanner:
 
         Returns:
             Path to saved visualization PNG
-        
+        """
         logger.info(f"[Stage2] Generating XAI visualization for interval {interval_id}...")
 
         # Import PIAVisualizer
@@ -1517,7 +1523,7 @@ class HybridXAIPipeline:
         save_visualizations: bool = True
     ) -> Dict[str, Any]:
         """
-        Full E2E pipeline: Stage1 → Stage2 → Aggregation → Korean Summary.
+        Full E2E pipeline: Stage1 -> Stage2 -> Aggregation -> Korean Summary.
 
         Args:
             video_path: Path to raw video file

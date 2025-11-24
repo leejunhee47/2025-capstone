@@ -35,16 +35,20 @@ def group_consecutive_frames(
     suspicious_indices: np.ndarray,
     fps: float,
     min_interval_frames: int = 14,
-    merge_gap_sec: float = 1.0
+    merge_gap_sec: float = 1.0,
+    timestamps: Optional[np.ndarray] = None
 ) -> List[Dict]:
     """
     연속된 의심 프레임들을 구간으로 그룹화
 
     Args:
         suspicious_indices: 의심 프레임 인덱스 배열 (e.g., [45, 46, 47, ..., 312])
-        fps: 영상 FPS
+        fps: 영상 FPS (timestamps=None일 때 fallback용)
         min_interval_frames: 최소 구간 프레임 수 (PIA는 최소 14 필요)
         merge_gap_sec: 이 시간 이내 구간은 병합 (초)
+        timestamps: Optional (T,) 프레임의 실제 타임스탬프 배열.
+                   제공되면 timestamps[frame_idx]로 정확한 시간 계산.
+                   None이면 frame_idx/fps로 계산 (순차 프레임 가정).
 
     Returns:
         intervals: List of interval dictionaries
@@ -106,8 +110,15 @@ def group_consecutive_frames(
     for interval_id, frame_indices in enumerate(merged_groups):
         start_frame = int(frame_indices[0])
         end_frame = int(frame_indices[-1])
-        start_time = start_frame / fps
-        end_time = end_frame / fps
+
+        # Use actual timestamps if provided, otherwise fall back to frame_idx/fps
+        if timestamps is not None:
+            start_time = float(timestamps[start_frame])
+            end_time = float(timestamps[end_frame])
+        else:
+            # Fallback: assume sequential frames
+            start_time = start_frame / fps
+            end_time = end_frame / fps
 
         intervals.append({
             'interval_id': interval_id,
@@ -129,7 +140,7 @@ def resample_frames_to_pia_format(
     phonemes: List[Dict],
     target_phonemes: int = 14,
     frames_per_phoneme: int = 5
-) -> Tuple[np.ndarray, List[str]]:
+) -> Tuple[np.ndarray, List[str], np.ndarray]:
     """
     Resample suspicious interval frames to PIA 14×5 format.
 
@@ -146,6 +157,7 @@ def resample_frames_to_pia_format(
     Returns:
         resampled_frames: (14, 5, H, W, 3)
         matched_phonemes: List[str] (length 14)
+        valid_mask: (14,) bool array - True if phoneme has actual frames, False if padding
     """
     phoneme_vocab = get_phoneme_vocab()  # 14 sorted phonemes
     H, W, C = frames.shape[1], frames.shape[2], frames.shape[3]
@@ -162,18 +174,25 @@ def resample_frames_to_pia_format(
                     by_phoneme[phoneme].append(frames[frame_idx])
                 break
 
-    # Build 14×5 grid (same as dataset._build_tensors logic)
+    # Build 14×5 grid with valid mask tracking
     resampled = np.zeros((target_phonemes, frames_per_phoneme, H, W, C), dtype=frames.dtype)
     matched_phonemes = []
+    valid_mask = np.zeros(target_phonemes, dtype=bool)
 
     for pi, phoneme in enumerate(phoneme_vocab):
         frames_list = by_phoneme[phoneme][:frames_per_phoneme]  # First F frames
-        matched_phonemes.append(phoneme)
+
+        if len(frames_list) > 0:
+            matched_phonemes.append(phoneme)
+            valid_mask[pi] = True  # Mark as valid
+        else:
+            matched_phonemes.append('<pad>')  # Explicit padding marker
+            valid_mask[pi] = False
 
         for fi, frame in enumerate(frames_list):
             resampled[pi, fi] = frame
 
-    return resampled, matched_phonemes
+    return resampled, matched_phonemes, valid_mask
 
 
 # Removed helper functions (_pad_phonemes, _sample_phonemes, _interpolate_frames, _repeat_frames, match_phonemes_to_timestamps)
@@ -603,42 +622,49 @@ def format_stage1_to_interface(
     timestamps = stage1_result['timestamps']
     total_frames = stage1_result['total_frames']
 
-    # Build frame_probabilities array
-    frame_probabilities = []
-    for i in range(total_frames):
-        frame_probabilities.append({
-            'frame_index': int(i),
-            'timestamp_sec': float(timestamps[i]),
-            'fake_probability': float(fake_probs[i]),
-            'is_suspicious': bool(fake_probs[i] > threshold)
-        })
+    # Count suspicious frames (for statistics only - PNG provides visual details)
+    suspicious_frame_count = int(np.sum(fake_probs > threshold))
 
-    # Build suspicious_intervals array with severity
+    # Build suspicious_intervals array with severity and playback_info
     suspicious_intervals = []
     for interval in suspicious_intervals_raw:
         start_frame = interval['start_frame']
         end_frame = interval['end_frame']
+        start_time_sec = float(interval['start_time'])
+        end_time_sec = float(interval['end_time'])
 
         # Calculate mean and max fake prob for this interval
         interval_probs = fake_probs[start_frame:end_frame+1]
         mean_fake_prob = float(np.mean(interval_probs))
         max_fake_prob = float(np.max(interval_probs))
 
+        # NEW: Add playback_info for mobile app video seeking
+        playback_info = {
+            'start_timestamp': f"{int(start_time_sec // 3600):02d}:{int((start_time_sec % 3600) // 60):02d}:{start_time_sec % 60:06.3f}",
+            'end_timestamp': f"{int(end_time_sec // 3600):02d}:{int((end_time_sec % 3600) // 60):02d}:{end_time_sec % 60:06.3f}",
+            'seek_url': f"#t={start_time_sec:.3f},{end_time_sec:.3f}",
+            'thumbnail_frame': int((start_frame + end_frame) // 2)
+        }
+
         suspicious_intervals.append({
             'interval_id': interval['interval_id'],
             'start_frame': int(start_frame),
             'end_frame': int(end_frame),
-            'start_time_sec': float(interval['start_time']),
-            'end_time_sec': float(interval['end_time']),
+            'start_time_sec': start_time_sec,
+            'end_time_sec': end_time_sec,
             'duration_sec': float(interval['duration']),
             'frame_count': int(interval['frame_count']),
             'mean_fake_prob': mean_fake_prob,
             'max_fake_prob': max_fake_prob,
-            'severity': calculate_severity(max_fake_prob)
+            'severity': calculate_severity(max_fake_prob),
+            'playback_info': playback_info  # NEW
         })
 
-    # Build statistics
+    # Build statistics (frame_probabilities removed - see PNG visualization)
     statistics = {
+        'total_frames': int(total_frames),
+        'suspicious_frame_count': suspicious_frame_count,
+        'suspicious_frame_ratio': float(suspicious_frame_count / total_frames * 100) if total_frames > 0 else 0.0,
         'mean_fake_prob': float(np.mean(fake_probs)),
         'std_fake_prob': float(np.std(fake_probs)),
         'max_fake_prob': float(np.max(fake_probs)),
@@ -647,7 +673,7 @@ def format_stage1_to_interface(
     }
 
     return {
-        'frame_probabilities': frame_probabilities,
+        # 'frame_probabilities' removed - use stage1_timeline.png for visual details
         'suspicious_intervals': suspicious_intervals,
         'statistics': statistics,
         'visualization': {}  # Populated by visualization function
@@ -675,6 +701,69 @@ def format_stage2_to_interface(
     from pathlib import Path
 
     pia_xai = interval_xai['pia_xai']
+
+    # [FIX] 에러 발생 시 안전한 기본값(Fallback) 반환
+    if 'error' in pia_xai:
+        error_msg = pia_xai.get('error', 'Unknown error')
+        return {
+            'interval_id': interval['interval_id'],
+            'time_range': f"{interval['start_time_sec']:.1f}s-{interval['end_time_sec']:.1f}s",
+            'prediction': {
+                'verdict': 'unknown',
+                'confidence': 0.0,
+                'probabilities': {'real': 0.5, 'fake': 0.5}
+            },
+            'branch_contributions': {
+                'visual': {
+                    'contribution_percent': 0,
+                    'l2_norm': 0,
+                    'rank': 0
+                },
+                'geometry': {
+                    'contribution_percent': 0,
+                    'l2_norm': 0,
+                    'rank': 0
+                },
+                'identity': {
+                    'contribution_percent': 0,
+                    'l2_norm': 0,
+                    'rank': 0
+                },
+                'top_branch': 'unknown',
+                'explanation': f"Analysis failed: {error_msg}"
+            },
+            'phoneme_analysis': {
+                'phoneme_scores': [],
+                'top_phoneme': '',
+                'total_phonemes': 0
+            },
+            'temporal_analysis': {
+                'heatmap_data': [],
+                'high_risk_points': [],
+                'statistics': {
+                    'mean_fake_prob': 0.0,
+                    'max_fake_prob': 0.0,
+                    'high_risk_count': 0
+                }
+            },
+            'geometry_analysis': {
+                'statistics': {
+                    'mean_mar': 0.0,
+                    'std_mar': 0.0,
+                    'min_mar': 0.0,
+                    'max_mar': 0.0,
+                    'expected_baseline': 0.39
+                },
+                'phoneme_mar': [],
+                'anomalous_frames': []
+            },
+            'korean_explanation': {
+                'summary': '분석 실패',
+                'key_findings': [f'오류: {error_msg}'],
+                'detailed_analysis': f'이 구간의 분석 중 오류가 발생했습니다: {error_msg}'
+            },
+            'visualization': {}
+        }
 
     # 1. Extract prediction
     detection = pia_xai['detection']
@@ -824,6 +913,14 @@ def format_stage2_to_interface(
         'anomalous_frames': anomalous_frames
     }
 
+    # Include baseline_info if available (from statistical baseline)
+    if 'baseline_info' in geom_analysis:
+        geometry_analysis['baseline_info'] = geom_analysis['baseline_info']
+
+    # Include original abnormal_phonemes for detailed analysis
+    if 'abnormal_phonemes' in geom_analysis:
+        geometry_analysis['abnormal_phonemes'] = geom_analysis['abnormal_phonemes']
+
     # 6. Build Korean explanation
     korean_summary = pia_xai['summary']
 
@@ -852,3 +949,97 @@ def format_stage2_to_interface(
         'korean_explanation': korean_explanation,
         'visualization': visualization
     }
+
+
+def resample_features_to_grid(
+    features: np.ndarray,
+    timestamps: np.ndarray,
+    phonemes: List[Dict],
+    target_phonemes: int = 14,
+    frames_per_phoneme: int = 5
+) -> Tuple[np.ndarray, List[str], np.ndarray]:
+    """
+    Resample features to PIA 14×5 grid format.
+
+    Shared utility used by both Stage 2 analyzer and preprocessing pipeline.
+    Groups feature frames by phoneme and builds a fixed-size grid.
+
+    Args:
+        features: (N, D) - Feature array (e.g., MAR, ArcFace embeddings)
+        timestamps: (N,) - Frame timestamps in seconds
+        phonemes: List of phoneme dicts with 'phoneme', 'start', 'end' keys
+        target_phonemes: Number of phonemes in grid (default: 14)
+        frames_per_phoneme: Frames per phoneme slot (default: 5)
+
+    Returns:
+        resampled: (14, 5, D) - Feature grid aligned to phoneme vocabulary
+        matched_phonemes: List[str] (length 14) - Phoneme labels or '<pad>'
+        valid_mask: (14,) bool array - True if phoneme has actual features, False if padding
+
+    Example:
+        >>> geometry = np.array([[0.5], [0.6], ...])  # (N, 1)
+        >>> timestamps = np.array([0.0, 0.2, 0.4, ...])
+        >>> phonemes = [{'phoneme': 'ㅏ', 'start': 0.0, 'end': 0.5}, ...]
+        >>> grid, matched, mask = resample_features_to_grid(geometry, timestamps, phonemes)
+        >>> grid.shape, mask.sum()
+        ((14, 5, 1), 3)  # Only 3 valid phonemes
+    """
+    from ..utils.korean_phoneme_config import get_phoneme_vocab, is_kept_phoneme
+
+    phoneme_vocab = get_phoneme_vocab()
+    N, D = features.shape
+
+    # Group features by phoneme
+    by_phoneme = {p: [] for p in phoneme_vocab}
+
+    for frame_idx, ts in enumerate(timestamps):
+        for p_dict in phonemes:
+            if p_dict['start'] <= ts <= p_dict['end']:
+                phoneme = p_dict['phoneme']
+                if is_kept_phoneme(phoneme):
+                    by_phoneme[phoneme].append(features[frame_idx])
+                break
+
+    # Build 14×5 grid with valid mask tracking
+    resampled = np.zeros((target_phonemes, frames_per_phoneme, D), dtype=features.dtype)
+    matched_phonemes = []
+    valid_mask = np.zeros(target_phonemes, dtype=bool)
+
+    for pi, phoneme in enumerate(phoneme_vocab):
+        frames_list = by_phoneme[phoneme][:frames_per_phoneme]
+
+        if len(frames_list) > 0:
+            matched_phonemes.append(phoneme)
+            valid_mask[pi] = True
+        else:
+            matched_phonemes.append('<pad>')
+            valid_mask[pi] = False
+
+        for fi, frame_feat in enumerate(frames_list):
+            resampled[pi, fi] = frame_feat
+
+    # Post-process: Handle NaN in features with phoneme-wise interpolation
+    # This matches the training behavior in phoneme_dataset.py
+    # For each phoneme, replace NaN with the mean of valid frames in that phoneme
+    for pi in range(target_phonemes):
+        for di in range(D):
+            # Get values for this phoneme and dimension
+            values = resampled[pi, :, di]
+
+            # Find non-NaN values
+            valid_mask_nan = ~np.isnan(values)
+
+            if valid_mask_nan.any():
+                # Compute mean of valid frames for this phoneme
+                phoneme_mean = values[valid_mask_nan].mean()
+
+                # Replace NaN with phoneme-specific mean
+                nan_mask = np.isnan(values)
+                if nan_mask.any():
+                    values[nan_mask] = phoneme_mean
+                    resampled[pi, :, di] = values
+            else:
+                # Entire phoneme has NaN → fill with 0 (will be masked out)
+                resampled[pi, :, di] = 0.0
+
+    return resampled, matched_phonemes, valid_mask

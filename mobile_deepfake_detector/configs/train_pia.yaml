@@ -3,7 +3,7 @@
 
 # Data settings
 data:
-  data_dir: preprocessed_data_phoneme/
+  data_dir: F:/preprocessed_data_pia_optimized/
   num_phonemes: 14  # Korean phoneme vocabulary
   frames_per_phoneme: 5  # Frames per phoneme class
   image_size: 112  # Lip crop size (112x112)
@@ -20,8 +20,8 @@ model:
 # Training settings
 training:
   epochs: 30
-  batch_size: 8  # Adjust based on GPU memory
-  learning_rate: 0.0001
+  batch_size: 16  # Increased for BatchNorm stability
+  learning_rate: 0.00005  # Reduced to prevent gradient explosion
   weight_decay: 0.0001
 
   # Optimizer

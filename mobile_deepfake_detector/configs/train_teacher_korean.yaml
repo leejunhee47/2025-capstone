@@ -17,8 +17,8 @@ model:
   gru:
     hidden_size: 300  # GRU hidden dimension (bi-directional output: 300*2 = 600)
     num_layers: 1
-    dropout: 0.5
-    recurrent_dropout: 0.5
+    dropout: 0.3  # 논문 기반: 0.3 (기존 0.5에서 감소)
+    recurrent_dropout: 0.3  # 논문 기반: 0.3 (기존 0.5에서 감소)
     bidirectional: true
 
   # Input Dimensions (Hardcoded in train.py - for reference only)
@@ -29,7 +29,7 @@ model:
   # Dense Layer
   dense:
     hidden_size: 100
-    dropout: 0.7
+    dropout: 0.3  # 논문 기반: 0.3 (기존 0.7에서 크게 감소 - 과도한 정규화 완화)
     activation: "tanh"
 
   # Attention
@@ -130,7 +130,7 @@ training:
 
   # Training Settings
   epochs: 15  # 테스트용 (원래: 15)
-  batch_size: 8  # 증가: 안정적인 gradient 업데이트
+  batch_size: 16  # 논문 기반: 32가 이상적이나, GPU 메모리 고려하여 16으로 설정 (기존 8에서 2배 증가)
   num_workers: 0  # Windows 메모리 에러 방지
 
   # ⚡ 병렬 학습 최적화
@@ -162,13 +162,16 @@ training:
     monitor: "val_loss"
     mode: "min"
 
-  # Class Imbalance Handling (False Positive 편향 해결)
-  # REAL 34.6% vs FAKE 65.4% 불균형을 해결하기 위해 두 가지 방법 동시 적용:
-  # 1. Weighted Sampler: REAL 샘플을 학습 중 더 자주 선택 (오버샘플링)
-  # 2. Weighted Loss: REAL 샘플의 loss에 더 높은 가중치 부여
-  use_weighted_sampler: true   # Oversampling으로 REAL 샘플 빈도 증가
-  use_weighted_loss: true      # REAL 오분류 시 loss 증폭
-  class_weights: [2.0, 1.0]    # [Real, Fake] - REAL 가중치 2배 (34.6% → 50% 효과)
+  # Class Imbalance Handling (논문 기반 최적화)
+  # 2025-11-17 분석 결과: Weighted Sampler/Loss가 오히려 FAKE bias 악화
+  # - 97.6% val_acc 달성했으나, REAL 샘플의 73-77%를 FAKE로 오분류
+  # - Frame-level 분석: 99-100%의 REAL 프레임이 FAKE로 예측됨
+  #
+  # 논문의 접근법: Class imbalance를 직접 다루지 않고, 충분한 데이터와 적절한 정규화로 해결
+  # → Dropout 0.3, Batch size 32, 자연스러운 학습 과정에서 균형 학습
+  use_weighted_sampler: false  # 논문 기반: 비활성화 (자연스러운 샘플링)
+  use_weighted_loss: false     # 논문 기반: 비활성화 (표준 Cross Entropy)
+  class_weights: [1.0, 1.0]    # 동일 가중치 - 모델이 데이터에서 직접 학습
 
   # Logging
   logging:

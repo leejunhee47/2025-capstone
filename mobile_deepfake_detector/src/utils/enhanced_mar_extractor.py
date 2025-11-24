@@ -96,6 +96,7 @@ class EnhancedMARExtractor:
         self,
         video_path: str,
         max_frames: Optional[int] = None,
+        frame_indices: Optional[List[int]] = None,
         save_landmarks: bool = False
     ) -> Dict:
         """
@@ -103,7 +104,11 @@ class EnhancedMARExtractor:
 
         Args:
             video_path: Path to video file
-            max_frames: Maximum frames to process (None = all frames)
+            max_frames: Maximum frames to process (None = all frames, legacy parameter)
+            frame_indices: Specific frame indices to extract (overrides max_frames)
+                - If provided, extracts MAR only for these frames
+                - Example: [0, 12, 24, 36, ...] for uniform sampling
+                - Ensures synchronization with VideoPreprocessor
             save_landmarks: If True, save frame and landmark data for visualization
 
         Returns:
@@ -126,10 +131,22 @@ class EnhancedMARExtractor:
             raise ValueError(f"Cannot open video: {video_path}")
 
         fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        total_frames_in_video = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        if max_frames:
-            total_frames = min(total_frames, max_frames)
+        # Determine which frames to extract
+        if frame_indices is not None:
+            # PIA mode: Extract specific frames only (synchronized with VideoPreprocessor)
+            frames_to_extract = sorted(frame_indices)
+            total_frames = len(frames_to_extract)
+            self.logger.info(f"Frame-specific extraction: {total_frames} frames from {frames_to_extract[0]} to {frames_to_extract[-1]}")
+        else:
+            # Legacy mode: All frames or limited by max_frames
+            if max_frames:
+                frames_to_extract = list(range(min(max_frames, total_frames_in_video)))
+                total_frames = len(frames_to_extract)
+            else:
+                frames_to_extract = list(range(total_frames_in_video))
+                total_frames = total_frames_in_video
 
         self.logger.info(f"Video: {total_frames} frames @ {fps:.2f} fps")
 
@@ -142,11 +159,17 @@ class EnhancedMARExtractor:
         landmark_frames = [] if save_landmarks else None  # NEW: Store frames for visualization
 
         detected_count = 0
-        frame_idx = 0
-        while True:
+
+        # Extract only requested frames (efficient seeking)
+        for frame_idx in frames_to_extract:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
-            if not ret or (max_frames and frame_idx >= max_frames):
-                break
+
+            if not ret:
+                # Frame read failed - append NaN
+                timestamp = frame_idx / fps
+                self._append_nan(mar_vertical, mar_horizontal, aspect_ratio, lip_roundness, timestamps, timestamp)
+                continue
 
             timestamp = frame_idx / fps
 
@@ -183,10 +206,10 @@ class EnhancedMARExtractor:
                 # No face detected
                 self._append_nan(mar_vertical, mar_horizontal, aspect_ratio, lip_roundness, timestamps, timestamp)
 
-            frame_idx += 1
-
-            if frame_idx % 100 == 0:
-                self.logger.info(f"Processed {frame_idx}/{total_frames} frames")
+            # Progress logging (every 100 frames)
+            processed = len(timestamps)
+            if processed % 100 == 0:
+                self.logger.info(f"Processed {processed}/{total_frames} frames")
 
         cap.release()
 
@@ -212,6 +235,98 @@ class EnhancedMARExtractor:
             self.logger.info(f"Saved {len(landmark_frames)} landmark frames for visualization")
 
         return result
+
+    def extract_from_frames(
+        self,
+        frames: List[np.ndarray],
+        fps: float = 30.0,
+        show_progress: bool = False
+    ) -> Dict:
+        """
+        Extract multi-feature MAR from pre-loaded frames (memory-efficient mode).
+
+        This method is designed for preprocessing pipelines where frames are
+        already loaded into memory, avoiding redundant video decoding.
+
+        Args:
+            frames: List of BGR frames (cv2 format) - each frame is (H, W, 3) numpy array
+            fps: Video FPS for timestamp calculation (default: 30.0)
+            show_progress: Whether to log progress updates
+
+        Returns:
+            dict: {
+                'mar_vertical': [0.25, 0.28, ...],
+                'mar_horizontal': [0.75, 0.73, ...],
+                'aspect_ratio': [1.85, 1.92, ...],
+                'lip_roundness': [0.45, 0.42, ...],
+                'timestamps': [0.0, 0.033, ...],
+                'fps': 30.0,
+                'total_frames': len(frames),
+                'detected_frames': num_detected
+            }
+
+        Example:
+            >>> # In preprocessing pipeline:
+            >>> raw_frames = [...]  # Pre-loaded frames
+            >>> mar_features = mar_extractor.extract_from_frames(raw_frames, fps=5.0)
+        """
+        self.logger.info(f"Extracting MAR from {len(frames)} pre-loaded frames...")
+
+        total_frames = len(frames)
+
+        # Initialize result arrays
+        mar_vertical = []
+        mar_horizontal = []
+        aspect_ratio = []
+        lip_roundness = []
+        timestamps = []
+
+        detected_count = 0
+
+        # Process each frame
+        for frame_idx, frame in enumerate(frames):
+            timestamp = frame_idx / fps
+
+            # Convert BGR to RGB
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            # Detect face and extract features
+            results = self.face_mesh.process(rgb_frame)
+
+            if results.multi_face_landmarks:
+                face_landmarks = results.multi_face_landmarks[0]
+
+                # Calculate multi-features
+                features = self._calculate_multi_features_relative(face_landmarks)
+
+                mar_vertical.append(features['mar_vertical'])
+                mar_horizontal.append(features['mar_horizontal'])
+                aspect_ratio.append(features['aspect_ratio'])
+                lip_roundness.append(features['lip_roundness'])
+                timestamps.append(timestamp)
+                detected_count += 1
+            else:
+                # No face detected
+                self._append_nan(mar_vertical, mar_horizontal, aspect_ratio, lip_roundness, timestamps, timestamp)
+
+            # Progress logging
+            if show_progress and (frame_idx + 1) % 100 == 0:
+                self.logger.info(f"Processed {frame_idx + 1}/{total_frames} frames")
+
+        self.logger.info(
+            f"MAR extraction complete: {detected_count}/{total_frames} frames detected"
+        )
+
+        return {
+            'mar_vertical': mar_vertical,
+            'mar_horizontal': mar_horizontal,
+            'aspect_ratio': aspect_ratio,
+            'lip_roundness': lip_roundness,
+            'timestamps': timestamps,
+            'fps': fps,
+            'total_frames': total_frames,
+            'detected_frames': detected_count
+        }
 
     def _append_nan(self, mar_v, mar_h, ar, lr, ts, timestamp):
         """Helper to append NaN values"""

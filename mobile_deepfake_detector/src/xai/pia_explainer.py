@@ -14,6 +14,7 @@ import torch.nn as nn
 from typing import Dict, List, Tuple, Optional, Any
 import numpy as np
 from pathlib import Path
+import json
 
 
 class PIAExplainer:
@@ -130,6 +131,21 @@ class PIAExplainer:
         h4 = base_model.attn_pool.register_forward_hook(attention_hook)
         self.hook_handles.append(h4)
 
+        # ===== 5. Fused Features Hook (for accurate branch contribution) =====
+        def fused_hook(module, input, output):
+            """
+            Captures fused features BEFORE attention pooling.
+            Input[0]: (B, P, 3*E) - Concatenated [visual, geometry, identity]
+            This is what the attention pooling actually sees.
+            """
+            # input is a tuple, input[0] is the actual fused tensor
+            if len(input) > 0:
+                fused = input[0]  # (B, P, 3*E)
+                self.activations['fused'] = fused.detach()
+
+        h5 = base_model.attn_pool.register_forward_hook(fused_hook)
+        self.hook_handles.append(h5)
+
     def remove_hooks(self):
         """Remove all registered hooks."""
         for handle in self.hook_handles:
@@ -190,10 +206,25 @@ class PIAExplainer:
             logits, _ = self.model(geoms, imgs, arcs, mask)
             probs = torch.softmax(logits, dim=-1)
 
+        # DEBUG: Print prediction details
+        print(f"\n[PIA DEBUG] video_id={video_id}")
+        print(f"  Logits: {logits}")
+        print(f"  Probs (Real, Fake): {probs}")
+        print(f"  Mask shape: {mask.shape if mask is not None else None}, Valid frames: {mask.sum().item() if mask is not None else 'N/A'}")
+
         # Extract prediction
         pred_class = torch.argmax(logits, dim=-1).item()
         confidence = probs[0, pred_class].item()
         is_fake = pred_class == 1
+
+        # DEBUG: Log prediction details
+        print(f"\n[PREDICTION DEBUG]")
+        print(f"  Logits: {logits[0].detach().cpu().numpy()}")
+        print(f"  Probs: {probs[0].detach().cpu().numpy()}")
+        print(f"  Predicted class: {pred_class} ({'FAKE' if is_fake else 'REAL'})")
+        print(f"  Confidence: {confidence:.4f}")
+        if confidence > 0.95:
+            print(f"  [WARNING] Overconfident prediction (>95%) - possible overfitting or easy sample")
 
         # TODO: Implement 5 analysis functions
         # 1. Branch contribution analysis
@@ -237,31 +268,63 @@ class PIAExplainer:
 
     def _analyze_branch_contributions(self) -> Dict[str, float]:
         """
-        Analyze contribution of each branch (Visual, Geometry, Identity).
+        Analyze contribution of each branch from FUSED features.
+
+        NOTE: We now use the concatenated fused features (B, P, 3*E)
+        to measure each branch's contribution, as this reflects what
+        the attention pooling actually sees.
 
         Returns:
             Dictionary with branch names and contribution scores (0-1)
         """
-        # Extract activations (B, P, E)
-        visual = self.activations['visual']  # (1, P, E)
-        geometry = self.activations['geometry']  # (1, P, E)
-        identity = self.activations['identity']  # (1, P, E)
+        # Extract fused features: (B, P, 3*E)
+        fused = self.activations.get('fused')  # (1, P, 3*E)
 
-        # Compute L2 norm as contribution metric
-        visual_norm = torch.norm(visual, p=2).item()
-        geometry_norm = torch.norm(geometry, p=2).item()
-        identity_norm = torch.norm(identity, p=2).item()
+        if fused is None:
+            # Fallback: use individual activations (old method)
+            print("\n[BRANCH CONTRIBUTION WARNING] Fused features not captured, using fallback method")
+            visual = self.activations.get('visual')
+            geometry = self.activations.get('geometry')
+            identity = self.activations.get('identity')
 
-        # Normalize to 0-1 (relative contributions)
+            if visual is None or geometry is None or identity is None:
+                return {'visual': 0.33, 'geometry': 0.33, 'identity': 0.34}
+
+            visual_norm = torch.norm(visual, p=2).item()
+            geometry_norm = torch.norm(geometry, p=2).item()
+            identity_norm = torch.norm(identity, p=2).item()
+        else:
+            # NEW: Extract each branch from fused tensor
+            E = fused.size(-1) // 3  # Embedding dim per branch
+
+            # Split fused features: (B, P, 3*E) → 3 × (B, P, E)
+            visual_part = fused[:, :, 0:E]       # First E dims
+            geometry_part = fused[:, :, E:2*E]   # Middle E dims
+            identity_part = fused[:, :, 2*E:3*E] # Last E dims
+
+            # Compute L2 norm for each branch
+            visual_norm = torch.norm(visual_part, p=2).item()
+            geometry_norm = torch.norm(geometry_part, p=2).item()
+            identity_norm = torch.norm(identity_part, p=2).item()
+
+        # Normalize to 0-1
         total = visual_norm + geometry_norm + identity_norm
         if total == 0:
             return {'visual': 0.33, 'geometry': 0.33, 'identity': 0.34}
 
-        return {
+        contributions = {
             'visual': visual_norm / total,
             'geometry': geometry_norm / total,
             'identity': identity_norm / total
         }
+
+        # DEBUG: Log contributions
+        print(f"\n[BRANCH CONTRIBUTION DEBUG]")
+        print(f"  Visual norm: {visual_norm:.4f} → {contributions['visual']:.1%}")
+        print(f"  Geometry norm: {geometry_norm:.4f} → {contributions['geometry']:.1%}")
+        print(f"  Identity norm: {identity_norm:.4f} → {contributions['identity']:.1%}")
+
+        return contributions
 
     def _analyze_phoneme_attention(self) -> List[Dict[str, Any]]:
         """
@@ -282,14 +345,24 @@ class PIAExplainer:
         }
 
         # Extract attention weights: (B, H, 1, P) → (P,)
-        attn_weights = self.activations['attention_weights']  # (1, H, 1, P)
+        attn_weights = self.activations.get('attention_weights', None)  # (1, H, 1, P)
 
+        # DEBUG: Print attention details
+        print(f"\n[PHONEME ATTENTION DEBUG]")
+        if 'attention_weights' not in self.activations:
+            print(f"  [ERROR] 'attention_weights' not found in activations!")
+            print(f"  Available keys: {list(self.activations.keys())}")
         if attn_weights is None:
+            print(f"  Attention weights: None (using uniform fallback)")
             # Fallback: uniform attention
             scores = [1.0 / len(self.phoneme_vocab)] * len(self.phoneme_vocab)
         else:
+            print(f"  Attention weights shape: {attn_weights.shape}")
+            print(f"  Attention weights (raw):\n{attn_weights}")
             # Average across heads: (1, H, 1, P) → (P,)
             scores = attn_weights.mean(dim=1).squeeze().cpu().numpy()  # (P,)
+            print(f"  Attention scores (averaged): {scores}")
+            print(f"  Sum of scores: {scores.sum():.4f} (should be ~1.0)")
 
         # Build phoneme analysis
         phoneme_analysis = []
@@ -426,22 +499,29 @@ class PIAExplainer:
 
     def _analyze_geometry(self) -> Dict[str, Any]:
         """
-        Analyze geometry (MAR) features.
+        Analyze geometry (MAR) features using statistical baseline.
 
         Returns:
             Dictionary with:
             - mean_mar: float
             - std_mar: float
             - abnormal_phonemes: List of phonemes with unusual MAR
+            - baseline_info: Baseline collection metadata
         """
-        # Expected MAR ranges (from korean_phoneme_config.py)
-        expected_mar_ranges = {
-            'M': (0.10, 0.30), 'B': (0.10, 0.30), 'BB': (0.10, 0.30), 'Ph': (0.10, 0.30),
-            'A': (0.60, 0.90), 'E': (0.50, 0.80), 'iA': (0.55, 0.85),
-            'O': (0.20, 0.50), 'U': (0.20, 0.50), 'iO': (0.25, 0.55), 'iU': (0.25, 0.55),
-            'I': (0.30, 0.60), 'EU': (0.30, 0.60),
-            'CHh': (0.25, 0.55)
-        }
+        # Load statistical baseline from Real videos (525 videos, 156k frames)
+        baseline_path = Path(__file__).parent.parent.parent / 'mar_baseline_pia_real_fixed.json'
+
+        try:
+            with open(baseline_path, 'r', encoding='utf-8') as f:
+                baseline = json.load(f)
+            phoneme_stats = baseline['phoneme_stats']
+            baseline_info = baseline['collection_info']
+            print(f"\n[MAR BASELINE] Loaded from {baseline_info['num_videos']} Real videos")
+        except Exception as e:
+            print(f"\n[MAR BASELINE ERROR] Failed to load baseline: {e}")
+            print(f"  Using fallback: uniform range [0.15, 0.45]")
+            phoneme_stats = None
+            baseline_info = None
 
         # MFA → 한글 매핑
         phoneme_to_korean = {
@@ -453,7 +533,7 @@ class PIAExplainer:
 
         # Extract MAR values: (1, P, F, 1) → (P, F)
         geoms = self.input_data['geoms']  # (1, P, F, 1)
-        mar_values = geoms[0, :, :, 0].cpu().numpy()  # (P, F) - explicitly index to avoid squeeze issues
+        mar_values = geoms[0, :, :, 0].cpu().numpy()  # (P, F)
 
         # Compute statistics (exclude padding - 0 values)
         mar_nonzero = mar_values[mar_values != 0]
@@ -464,37 +544,137 @@ class PIAExplainer:
             mean_mar = 0.0
             std_mar = 0.0
 
-        # Find abnormal phonemes (MAR outside expected range)
+        # Find abnormal phonemes using statistical baseline
         abnormal_phonemes = []
-        P_actual = mar_values.shape[0]  # Actual number of phonemes in mar_values
+        P_actual = mar_values.shape[0]
+
         for pi, phoneme in enumerate(self.phoneme_vocab):
-            # Skip if index exceeds actual data size
             if pi >= P_actual:
                 break
 
-            # Average MAR across F frames for this phoneme
-            phoneme_mar = mar_values[pi].mean()
+            # Average MAR across F frames for this phoneme (exclude padding - 0 values)
+            phoneme_frames = mar_values[pi]
+            phoneme_frames_nonzero = phoneme_frames[phoneme_frames != 0]
 
-            # Check if within expected range (±20% tolerance)
-            if phoneme in expected_mar_ranges:
-                min_mar, max_mar = expected_mar_ranges[phoneme]
-                tolerance = 0.2
+            # Skip if all frames are padding
+            if len(phoneme_frames_nonzero) == 0:
+                continue
 
-                if not ((min_mar - tolerance) <= phoneme_mar <= (max_mar + tolerance)):
+            phoneme_mar = float(phoneme_frames_nonzero.mean())
+
+            if phoneme_stats and phoneme in phoneme_stats:
+                stats = phoneme_stats[phoneme]
+
+                # Use P10-P90 as expected range (80% of Real video distribution)
+                expected_min = stats['p10']
+                expected_max = stats['p90']
+                expected_mean = stats['mean']
+                expected_std = stats['std']
+
+                # Calculate Z-score (how many std devs from mean)
+                z_score = (phoneme_mar - expected_mean) / expected_std if expected_std > 0 else 0
+
+                # Check if outside P10-P90 range (abnormal)
+                if not (expected_min <= phoneme_mar <= expected_max):
+                    # Determine severity
+                    if abs(z_score) > 3:
+                        severity = "high"  # >3 std devs
+                    elif abs(z_score) > 2:
+                        severity = "medium"  # >2 std devs
+                    else:
+                        severity = "low"  # within 2 std devs
+
                     abnormal_phonemes.append({
                         'phoneme': phoneme_to_korean.get(phoneme, phoneme),
                         'phoneme_mfa': phoneme,
                         'measured_mar': float(phoneme_mar),
-                        'expected_range': [min_mar, max_mar],
-                        'deviation': float(phoneme_mar - ((min_mar + max_mar) / 2))
+                        'expected_mean': expected_mean,
+                        'expected_range': [expected_min, expected_max],
+                        'deviation': float(phoneme_mar - expected_mean),
+                        'z_score': float(z_score),
+                        'severity': severity,
+                        'explanation': self._generate_mar_explanation(
+                            phoneme, phoneme_mar, expected_mean, expected_min, expected_max, z_score
+                        )
+                    })
+            else:
+                # Fallback: use simple range check if baseline not available
+                expected_min, expected_max = 0.15, 0.45
+                if not (expected_min <= phoneme_mar <= expected_max):
+                    abnormal_phonemes.append({
+                        'phoneme': phoneme_to_korean.get(phoneme, phoneme),
+                        'phoneme_mfa': phoneme,
+                        'measured_mar': float(phoneme_mar),
+                        'expected_mean': 0.30,
+                        'expected_range': [expected_min, expected_max],
+                        'deviation': float(phoneme_mar - 0.30),
+                        'z_score': 0.0,
+                        'severity': 'unknown',
+                        'explanation': f'Baseline 없음 (측정값: {phoneme_mar:.3f})'
                     })
 
         return {
             'mean_mar': mean_mar,
             'std_mar': std_mar,
             'abnormal_phonemes': abnormal_phonemes,
-            'num_abnormal': len(abnormal_phonemes)
+            'num_abnormal': len(abnormal_phonemes),
+            'baseline_info': {
+                'num_videos': baseline_info['num_videos'] if baseline_info else 0,
+                'total_frames': baseline_info['total_frames'] if baseline_info else 0,
+                'mar_version': baseline_info['mar_version'] if baseline_info else 'unknown'
+            } if baseline_info else None
         }
+
+    def _generate_mar_explanation(
+        self,
+        phoneme: str,
+        measured: float,
+        expected_mean: float,
+        expected_min: float,
+        expected_max: float,
+        z_score: float
+    ) -> str:
+        """
+        Generate Korean explanation for MAR anomaly.
+
+        Args:
+            phoneme: Phoneme MFA code
+            measured: Measured MAR value
+            expected_mean: Expected mean from baseline
+            expected_min: P10 from baseline
+            expected_max: P90 from baseline
+            z_score: Standard deviations from mean
+
+        Returns:
+            Korean explanation string
+        """
+        phoneme_to_korean = {
+            'A': 'ㅏ', 'B': 'ㅂ', 'BB': 'ㅃ', 'CHh': 'ㅊ',
+            'E': 'ㅔ', 'EU': 'ㅡ', 'I': 'ㅣ', 'M': 'ㅁ',
+            'O': 'ㅗ', 'Ph': 'ㅍ', 'U': 'ㅜ', 'iA': 'ㅑ',
+            'iO': 'ㅛ', 'iU': 'ㅠ'
+        }
+
+        phoneme_kr = phoneme_to_korean.get(phoneme, phoneme)
+
+        if measured > expected_max:
+            direction = "크게"
+            comparison = f"정상 범위({expected_min:.3f}~{expected_max:.3f})보다 {measured - expected_max:.3f} 더 큼"
+        else:
+            direction = "작게"
+            comparison = f"정상 범위({expected_min:.3f}~{expected_max:.3f})보다 {expected_min - measured:.3f} 더 작음"
+
+        # Z-score interpretation
+        if abs(z_score) > 3:
+            severity_desc = "매우 비정상적"
+        elif abs(z_score) > 2:
+            severity_desc = "비정상적"
+        else:
+            severity_desc = "약간 비정상적"
+
+        return f"'{phoneme_kr}' 음소의 입 벌림이 {direction} 측정됨 ({measured:.3f}). " \
+               f"{comparison}. " \
+               f"Z-score: {z_score:.2f} ({severity_desc})"
 
     def _generate_korean_summary(
         self,
@@ -544,7 +724,7 @@ class PIAExplainer:
         identity_contrib = branch_contributions['identity'] * 100
 
         findings.append(
-            f"• 시각 정보 {visual_contrib:.1f}%, 기하학 {geometry_contrib:.1f}%, "
+            f"- 시각 정보 {visual_contrib:.1f}%, 기하학 {geometry_contrib:.1f}%, "
             f"신원 {identity_contrib:.1f}% 비율로 판정에 기여"
         )
 
@@ -552,15 +732,15 @@ class PIAExplainer:
         high_attention_phonemes = [p for p in phoneme_scores if p['importance_level'] == 'high']
         if high_attention_phonemes:
             phonemes_str = ', '.join([p['phoneme'] for p in high_attention_phonemes])
-            findings.append(f"• 주목도가 높은 음소: {phonemes_str}")
+            findings.append(f"- 주목도가 높은 음소: {phonemes_str}")
 
         # Finding 3: Confidence assessment
         if confidence > 0.8:
-            findings.append(f"• 신뢰도가 매우 높음 (80% 이상)")
+            findings.append(f"- 신뢰도가 매우 높음 (80% 이상)")
         elif confidence > 0.6:
-            findings.append(f"• 신뢰도가 양호함 (60-80%)")
+            findings.append(f"- 신뢰도가 양호함 (60-80%)")
         else:
-            findings.append(f"• 신뢰도가 낮음 (60% 미만) - 추가 검증 권장")
+            findings.append(f"- 신뢰도가 낮음 (60% 미만) - 추가 검증 권장")
 
         key_findings = '\n'.join(findings)
 

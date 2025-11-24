@@ -13,7 +13,7 @@ PIA 논문 구현 - 한국어 음소(phoneme) 추출
 # pyright: reportMissingTypeStubs=false
 
 import logging
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Tuple, Union, Optional, TypedDict
 from pathlib import Path
 import numpy as np
 import torch
@@ -27,6 +27,34 @@ from torchaudio.functional import forced_align  # type: ignore[import]
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
+
+
+# ===== Type Definitions for Optimization (30fps) =====
+
+class WhisperTranscriptionResult(TypedDict):
+    """
+    WhisperX transcription 결과 구조체
+
+    STEP 1.5에서 1회만 transcribe하여 Stage1/Stage2가 공유
+    """
+    segments: List[dict]      # WhisperX segments with timestamps
+    transcription: str        # Full text transcription
+    audio: np.ndarray        # Audio samples (for reuse, 16kHz)
+    audio_path: str          # Path to WAV file (for cleanup)
+
+
+class PhonemeAlignmentResult(TypedDict):
+    """
+    Phoneme alignment 결과 구조체
+
+    align_from_transcription()이 반환하는 타입
+    """
+    phonemes: List[str]                      # List of phoneme symbols (14 key phonemes)
+    intervals: List[Tuple[float, float]]     # Time intervals [(start, end), ...]
+    phoneme_labels: np.ndarray              # Frame-matched phoneme indices
+    transcription: str                       # Original transcription text
+    duration: float                          # Total audio duration
+    method: str                              # Alignment method name
 
 
 class HybridPhonemeAligner:
@@ -147,66 +175,206 @@ class HybridPhonemeAligner:
 
         self.logger.info(f"Built phoneme vocabulary with {len(self.phoneme_to_id)} entries")
 
-    def align_video(self, video_path: Union[str, Path]) -> Dict:
+    def align_video(
+        self,
+        video_path: Union[str, Path],
+        audio_path: Union[str, Path, None] = None,
+        start_time: float = 0.0,
+        end_time: Optional[float] = None
+    ) -> Dict:
         """
         PIA 파이프라인을 사용한 비디오 음소 정렬
 
+        **리팩토링**: transcribe_only() + align_from_transcription() wrapper
+        하위 호환성을 위해 유지됩니다.
+
         Args:
             video_path: 비디오 파일 경로
+            audio_path: 사전 추출된 오디오 파일 경로 (Audio Reuse 최적화, 선택 사항)
+            start_time: 시작 시간 (초, 기본값: 0.0)
+            end_time: 종료 시간 (초, 기본값: None - 전체 비디오)
 
         Returns:
             음소(phonemes), 구간(intervals), 전사(transcription)를 포함한 딕셔너리
+        """
+        try:
+            self.logger.info(f"[ALIGN_VIDEO] Processing: {video_path}")
+
+            # Step 1: Transcription (WhisperX)
+            transcription_result = self.transcribe_only(
+                video_path=video_path,
+                audio_path=audio_path,
+                start_time=start_time,
+                end_time=end_time
+            )
+
+            # Step 2: Alignment (Phoneme matching)
+            alignment_result = self.align_from_transcription(
+                transcription_result=transcription_result,
+                timestamps=None,  # No frame matching in standalone mode
+                start_time=0.0    # No offset for full video
+            )
+
+            # Cleanup audio file if we extracted it
+            audio_file = Path(transcription_result['audio_path'])
+            if audio_file.exists() and audio_path is None:
+                audio_file.unlink()
+                self.logger.info(f"  ✓ Cleaned up temporary audio: {audio_file.name}")
+
+            # Return result in original format (backward compatibility)
+            return {
+                'phonemes': alignment_result['phonemes'],
+                'intervals': alignment_result['intervals'],
+                'transcription': alignment_result['transcription'],
+                'duration': alignment_result['duration'],
+                'method': alignment_result['method']
+            }
+
+        except Exception as e:
+            self.logger.error(f"Error processing {video_path}: {str(e)}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            return self._empty_result()
+
+    def transcribe_only(
+        self,
+        video_path: Union[str, Path],
+        audio_path: Union[str, Path, None] = None,
+        start_time: float = 0.0,
+        end_time: Optional[float] = None
+    ) -> WhisperTranscriptionResult:
+        """
+        WhisperX transcription만 수행 (alignment는 하지 않음)
+
+        30fps 최적화: STEP 1.5에서 1회만 호출하여 Stage1/Stage2가 공유
+
+        Args:
+            video_path: 비디오 파일 경로
+            audio_path: 사전 추출된 오디오 파일 경로 (선택 사항)
+            start_time: 시작 시간 (초, 기본값: 0.0)
+            end_time: 종료 시간 (초, 기본값: None - 전체 비디오)
+
+        Returns:
+            WhisperTranscriptionResult: segments, transcription, audio, audio_path
         """
         if not isinstance(video_path, Path):
             video_path = Path(video_path)
 
         if not video_path.exists():
             self.logger.error(f"Video not found: {video_path}")
-            return self._empty_result()
+            raise FileNotFoundError(f"Video not found: {video_path}")
+
+        cleanup_audio = False
 
         try:
-            # 단계 1: 비디오에서 오디오 추출
-            self.logger.info(f"Processing: {video_path.name}")
-            audio_path = self._extract_audio(video_path)
+            # 단계 1: 비디오에서 오디오 추출 (또는 사전 추출된 파일 사용)
+            self.logger.info(f"[TRANSCRIBE_ONLY] Processing: {video_path.name}")
+            if start_time > 0.0 or end_time is not None:
+                self.logger.info(f"  Time range: {start_time:.2f}s - {end_time if end_time else 'end'}s")
+
+            if audio_path is not None:
+                # Audio Reuse: 사전 추출된 오디오 사용
+                audio_path = Path(audio_path)
+                cleanup_audio = False
+                self.logger.info(f"  Using pre-extracted audio: {audio_path.name}")
+            else:
+                # 기존 방식: 비디오에서 오디오 추출
+                audio_path = self._extract_audio(video_path, start_time, end_time)
+                cleanup_audio = True
 
             # WhisperX를 위한 오디오 로드
             audio = whisperx.load_audio(str(audio_path))
 
             # 단계 2: WhisperX 전사 + 세그먼트 분할
-            self.logger.info("  [1/3] WhisperX transcription...")
+            self.logger.info("  WhisperX transcription...")
             result = self.whisper_model.transcribe(
                 audio,
-                batch_size=4,  # MKL 메모리 할당 오류 방지를 위해 16→4로 감소
+                batch_size=4,
                 language="ko"
             )
 
             segments = result.get("segments", [])
             if not segments:
                 self.logger.warning("No segments found")
-                return self._empty_result()
+                segments = []
 
             transcription = result.get("text", "")
-            self.logger.info(f"  Transcription: {transcription[:100]}...")
-            self.logger.info(f"  Found {len(segments)} segments")
+            self.logger.info(f"  ✓ Transcription: {transcription[:100]}...")
+            self.logger.info(f"  ✓ Found {len(segments)} segments")
 
-            # 단계 3: 각 세그먼트 처리
+            # Return WhisperTranscriptionResult
+            return {
+                'segments': segments,
+                'transcription': transcription,
+                'audio': audio,
+                'audio_path': str(audio_path)
+            }
+
+        except Exception as e:
+            self.logger.error(f"Error in transcribe_only: {str(e)}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            raise
+
+    def align_from_transcription(
+        self,
+        transcription_result: WhisperTranscriptionResult,
+        timestamps: Optional[np.ndarray] = None,
+        start_time: float = 0.0
+    ) -> PhonemeAlignmentResult:
+        """
+        Pre-computed transcription으로부터 phoneme alignment만 수행
+
+        30fps 최적화: Stage2가 STEP 1.5의 shared transcription을 사용
+
+        Args:
+            transcription_result: transcribe_only()의 결과
+            timestamps: Frame timestamps for phoneme-frame matching (optional)
+            start_time: Interval offset (초, Stage2 interval의 시작 시간)
+
+        Returns:
+            PhonemeAlignmentResult: phonemes, intervals, phoneme_labels
+        """
+        try:
+            segments = transcription_result['segments']
+            audio = transcription_result['audio']
+            transcription = transcription_result['transcription']
+
+            if not segments:
+                self.logger.warning("No segments in transcription_result")
+                return self._empty_alignment_result()
+
+            self.logger.info(f"[ALIGN_FROM_TRANSCRIPTION] Processing {len(segments)} segments")
+            if start_time > 0.0:
+                self.logger.info(f"  Interval offset: {start_time:.2f}s")
+
+            # 단계 1: 각 세그먼트 처리
             all_phonemes = []
             all_intervals = []
 
             for seg_idx, segment in enumerate(segments):
-                self.logger.info(f"  [2/3] Processing segment {seg_idx+1}/{len(segments)}")
+                self.logger.info(f"  Processing segment {seg_idx+1}/{len(segments)}")
 
-                # 세그먼트 오디오 추출
-                start_time = segment.get("start", 0)
-                end_time = segment.get("end", 0)
+                # 세그먼트 시간 범위
+                seg_start = segment.get("start", 0)
+                seg_end = segment.get("end", 0)
+
+                # Interval offset 적용 (Stage2에서 호출 시)
+                # 예: video의 10.0s~15.0s 구간이면, segment timestamps를 10.0s 기준으로 조정
+                if start_time > 0.0:
+                    # Skip segments outside the interval
+                    if seg_end < start_time:
+                        continue
+                    if seg_start > start_time + 30.0:  # Assume max 30s interval
+                        continue
 
                 # 빈 세그먼트 건너뛰기
-                if start_time >= end_time:
+                if seg_start >= seg_end:
                     continue
 
                 # 세그먼트 오디오 샘플 가져오기
-                start_sample = int(start_time * 16000)
-                end_sample = int(end_time * 16000)
+                start_sample = int(seg_start * 16000)
+                end_sample = int(seg_end * 16000)
                 segment_audio = audio[start_sample:end_sample]
 
                 # 너무 짧은 세그먼트 건너뛰기
@@ -227,29 +395,22 @@ class HybridPhonemeAligner:
                 self.logger.info(f"    Text: {segment_text}")
                 self.logger.info(f"    Phonemes ({len(phonemes)}): {''.join(phonemes[:20])}...")
 
-                # 단계 4: 이 세그먼트에 PIA 스타일 정렬 적용
-                self.logger.info("  [3/3] PIA-style alignment (uniform + WhisperX refinement)...")
+                # 단계 2: 이 세그먼트에 PIA 스타일 정렬 적용
                 phoneme_intervals = self._align_segment_pia_style(
                     segment_audio,
                     phonemes,
-                    start_time,  # 이 세그먼트의 시간 오프셋
-                    segment_text  # 원본 한국어 텍스트
+                    seg_start,  # 이 세그먼트의 시간 오프셋 (absolute time)
+                    segment_text
                 )
 
                 if phoneme_intervals:
                     all_phonemes.extend(phonemes)
                     all_intervals.extend(phoneme_intervals)
-                    self.logger.info(f"    Aligned {len(phoneme_intervals)} phonemes")
-
-            # 정리
-            if audio_path.exists():
-                audio_path.unlink()
+                    self.logger.info(f"    ✓ Aligned {len(phoneme_intervals)} phonemes")
 
             self.logger.info(f"Total: {len(all_phonemes)} phonemes aligned (before filtering)")
 
-            # ===== FILTER TO KEEP ONLY 14 KEY PHONEMES (PIA-main approach) =====
-            # 99개 MFA 음소 → 14개 핵심 음소로 필터링
-            # 이렇게 해야 50프레임/14음소 = ~3.5 프레임/음소 (충분한 프레임 확보)
+            # 단계 3: 14개 핵심 음소로 필터링
             filtered_phonemes = []
             filtered_intervals = []
 
@@ -261,19 +422,73 @@ class HybridPhonemeAligner:
             self.logger.info(f"Filtered: {len(filtered_phonemes)} phonemes kept (from {len(all_phonemes)})")
             self.logger.info(f"Unique phonemes: {set(filtered_phonemes)}")
 
+            # 단계 4: Phoneme-to-frame matching (if timestamps provided)
+            phoneme_labels = np.array([], dtype=np.int32)
+            if timestamps is not None and len(timestamps) > 0:
+                phoneme_labels = self._match_phonemes_to_frames(
+                    filtered_intervals,
+                    timestamps,
+                    start_time  # Apply offset for interval matching
+                )
+                self.logger.info(f"  ✓ Matched {len(phoneme_labels)} frames to phonemes")
+
+            # Return PhonemeAlignmentResult
             return {
-                'phonemes': filtered_phonemes,  # 14개 핵심 음소만
+                'phonemes': filtered_phonemes,
                 'intervals': filtered_intervals,
+                'phoneme_labels': phoneme_labels,
                 'transcription': transcription,
                 'duration': float(len(audio) / 16000),
-                'method': 'pia_style_whisperx_align_filtered'
+                'method': 'pia_style_from_shared_transcription'
             }
 
         except Exception as e:
-            self.logger.error(f"Error processing {video_path}: {str(e)}")
+            self.logger.error(f"Error in align_from_transcription: {str(e)}")
             import traceback
             self.logger.error(traceback.format_exc())
-            return self._empty_result()
+            raise
+
+    def _match_phonemes_to_frames(
+        self,
+        phoneme_intervals: List[Tuple[float, float]],
+        timestamps: np.ndarray,
+        offset: float = 0.0
+    ) -> np.ndarray:
+        """
+        Match phoneme intervals to frame timestamps
+
+        Args:
+            phoneme_intervals: List of (start, end) tuples (absolute time)
+            timestamps: Frame timestamps (relative time from offset)
+            offset: Time offset to convert relative → absolute
+
+        Returns:
+            phoneme_labels: Array of phoneme indices per frame
+        """
+        phoneme_labels = np.zeros(len(timestamps), dtype=np.int32)
+
+        for idx, rel_timestamp in enumerate(timestamps):
+            # Convert relative timestamp to absolute time
+            abs_timestamp = rel_timestamp + offset
+
+            # Find matching phoneme
+            for phoneme_idx, (phn_start, phn_end) in enumerate(phoneme_intervals):
+                if phn_start <= abs_timestamp <= phn_end:
+                    phoneme_labels[idx] = phoneme_idx
+                    break
+
+        return phoneme_labels
+
+    def _empty_alignment_result(self) -> PhonemeAlignmentResult:
+        """Return empty alignment result"""
+        return {
+            'phonemes': [],
+            'intervals': [],
+            'phoneme_labels': np.array([], dtype=np.int32),
+            'transcription': '',
+            'duration': 0.0,
+            'method': 'empty'
+        }
 
     def _apply_phoneme_padding(
         self,
@@ -610,12 +825,19 @@ class HybridPhonemeAligner:
 
         return mfa_phonemes
 
-    def _extract_audio(self, video_path: Path) -> Path:
+    def _extract_audio(
+        self,
+        video_path: Path,
+        start_time: float = 0.0,
+        end_time: Optional[float] = None
+    ) -> Path:
         """
         ffmpeg를 사용하여 비디오에서 오디오 추출
 
         Args:
             video_path: 비디오 파일 경로
+            start_time: 시작 시간 (초, 기본값: 0.0)
+            end_time: 종료 시간 (초, 기본값: None - 전체 비디오)
 
         Returns:
             추출된 오디오 파일 경로 (WAV, 16kHz)
@@ -626,15 +848,24 @@ class HybridPhonemeAligner:
         # 임시 오디오 파일 생성
         audio_path = Path(tempfile.mktemp(suffix=".wav"))
 
-        # ffmpeg로 오디오 추출
+        # ffmpeg로 오디오 추출 (시간 범위 지원)
         cmd = [
-            "ffmpeg", "-y", "-i", str(video_path),
+            "ffmpeg", "-y",
+            "-ss", str(start_time),  # 시작 시간
+            "-i", str(video_path),
+        ]
+
+        # 종료 시간 또는 전체 비디오
+        if end_time is not None:
+            cmd.extend(["-to", str(end_time)])  # 절대 종료 시간
+
+        cmd.extend([
             "-vn",  # 비디오 없음
             "-acodec", "pcm_s16le",  # PCM 16-bit
             "-ar", "16000",  # 16kHz 샘플레이트
             "-ac", "1",  # 모노
             str(audio_path)
-        ]
+        ])
 
         subprocess.run(
             cmd,

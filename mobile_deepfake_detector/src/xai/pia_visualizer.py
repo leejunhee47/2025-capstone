@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 import warnings
 
+# Import Korean phoneme filtering
+from ..utils.korean_phoneme_config import get_phoneme_vocab, is_kept_phoneme
+
 # Suppress matplotlib warnings
 warnings.filterwarnings('ignore', category=UserWarning)
 
@@ -206,8 +209,14 @@ class PIAVisualizer:
         # Extract phoneme scores
         phoneme_data = result['phoneme_analysis']['phoneme_scores']
 
+        # Filter to keep only Korean phonemes in KEEP_PHONEMES_KOREAN (14 phonemes)
+        filtered_data = [
+            p for p in phoneme_data
+            if is_kept_phoneme(p.get('phoneme_mfa', p.get('phoneme', '')))
+        ]
+
         # Sort by score (descending) and take top N
-        sorted_data = sorted(phoneme_data, key=lambda x: x['score'], reverse=True)[:top_n]
+        sorted_data = sorted(filtered_data, key=lambda x: x['score'], reverse=True)[:top_n]
 
         # Prepare data for plotting
         phonemes = [f"{p['phoneme']}\n({p['phoneme_mfa']})" for p in sorted_data]
@@ -276,10 +285,15 @@ class PIAVisualizer:
         # Extract temporal heatmap data
         heatmap_data = np.array(result['temporal_analysis']['heatmap'])  # (14, 5)
 
-        # Get phoneme labels
+        # Get phoneme labels (filter to keep only KEEP_PHONEMES_KOREAN)
+        phoneme_data = result['phoneme_analysis']['phoneme_scores']
+        filtered_phonemes = [
+            p for p in phoneme_data
+            if is_kept_phoneme(p.get('phoneme_mfa', p.get('phoneme', '')))
+        ]
         phoneme_labels = [
             f"{p['phoneme']} ({p['phoneme_mfa']})"
-            for p in result['phoneme_analysis']['phoneme_scores']
+            for p in filtered_phonemes
         ]
 
         # Create heatmap
