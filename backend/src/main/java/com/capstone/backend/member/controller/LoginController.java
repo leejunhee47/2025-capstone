@@ -44,9 +44,9 @@ public class LoginController {
      */
     @PostMapping("/login")
     public ResponseEntity<?> processLogin(
-                                  @Validated @RequestBody LoginRequest loginRequest
-                                , BindingResult bindingResult
-                                , HttpSession session) {
+            @Validated @RequestBody LoginRequest loginRequest
+            , BindingResult bindingResult
+            , HttpSession session) {
 
         if (bindingResult.hasErrors()) {
 
