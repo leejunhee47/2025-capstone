@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'http_client.dart';
 import 'dart:async';
+import 'dart:typed_data'; // [추가] 이미지 바이너리 처리를 위해 필요
 import 'result_detail_page.dart';
 
 class DetectionTab extends StatefulWidget {
@@ -26,13 +27,13 @@ class _DetectionTabState extends State<DetectionTab> {
   String _analysisStatusText = "";
 
   // 결과 데이터 저장 변수
-  String? _finalResultMsg;
-  String? _finalResultId;
+  String? _finalResultId; // [중요] 상세 페이지 조회를 위한 Result ID
+  String? _currentRequestId; // [추가] 썸네일 조회를 위한 Request ID
   double _realProb = 0.0;
   double _fakeProb = 0.0;
-  String _videoName = ""; // 결과 카드에 표시할 영상 이름
+  String _videoName = "";
   bool _isFakeResult = false;
-  bool _showResult = false; // 결과를 보여줄지 여부
+  bool _showResult = false;
 
   Timer? _pollingTimer;
 
@@ -52,7 +53,7 @@ class _DetectionTabState extends State<DetectionTab> {
       setState(() {
         _urlController.text = widget.sharedUrl!;
         _selectedFilePath = null;
-        _showResult = false; // 새 URL이 오면 결과 숨김
+        _showResult = false;
         _videoName = widget.sharedUrl!;
       });
     }
@@ -64,6 +65,26 @@ class _DetectionTabState extends State<DetectionTab> {
     super.dispose();
   }
 
+  // [추가] 썸네일 이미지를 POST 요청으로 받아오는 함수
+  Future<Uint8List?> _fetchThumbnailBytes(String reqId) async {
+    try {
+      final headers = await getAuthHeaders();
+      // 서버의 DetectionController: passDetectionThumbnail (@PostMapping)
+      final response = await httpClient.post(
+        Uri.parse('$baseUrl/api/v1/detection/thumbnail/polling'),
+        headers: headers,
+        body: {'requestId': reqId},
+      );
+
+      if (response.statusCode == 200) {
+        return response.bodyBytes;
+      }
+    } catch (e) {
+      print("썸네일 로드 실패: $e");
+    }
+    return null;
+  }
+
   Future<void> _pickFile() async {
     try {
       FilePickerResult? result = await FilePicker.platform.pickFiles(
@@ -72,9 +93,9 @@ class _DetectionTabState extends State<DetectionTab> {
       if (result != null) {
         setState(() {
           _selectedFilePath = result.files.single.path;
-          _videoName = result.files.single.name; // 파일명 저장
+          _videoName = result.files.single.name;
           _urlController.clear();
-          _showResult = false; // 새 파일 선택 시 결과 숨김
+          _showResult = false;
         });
       }
     } catch (e) {
@@ -107,12 +128,11 @@ class _DetectionTabState extends State<DetectionTab> {
       return;
     }
 
-    // [분석 시작] 로딩 ON, 기존 결과 OFF
     setState(() {
       _isAnalyzing = true;
       _analysisStatusText = "서버에 요청을 전송 중입니다...";
       _showResult = false;
-      // 영상 이름 업데이트 (URL인 경우)
+      _currentRequestId = null; // 초기화
       if (url.isNotEmpty) _videoName = url;
     });
 
@@ -121,7 +141,6 @@ class _DetectionTabState extends State<DetectionTab> {
     try {
       String? requestId;
 
-      // --- URL 전송 ---
       if (url.isNotEmpty) {
         final headers = await getAuthHeaders();
         final response = await httpClient.post(
@@ -130,14 +149,11 @@ class _DetectionTabState extends State<DetectionTab> {
           body: {'videoUrl': url, 'callbackUrl': tempCallbackUrl},
         );
         requestId = _parseRequestId(response);
-
-        // --- 파일 전송 ---
       } else if (filePath != null) {
         final request = http.MultipartRequest(
           'POST',
           Uri.parse('$baseUrl/api/v1/detection/upload'),
         );
-
         request.fields['callbackUrl'] = tempCallbackUrl;
         request.files.add(await http.MultipartFile.fromPath('file', filePath));
 
@@ -149,9 +165,9 @@ class _DetectionTabState extends State<DetectionTab> {
         requestId = _parseRequestId(response);
       }
 
-      // 요청 성공 -> 폴링 시작
       if (requestId != null) {
         setState(() {
+          _currentRequestId = requestId; // 썸네일 조회를 위해 ID 저장
           _analysisStatusText = "분석 진행 중... (ID: $requestId)\n잠시만 기다려주세요.";
         });
         _startPolling(requestId);
@@ -191,73 +207,64 @@ class _DetectionTabState extends State<DetectionTab> {
 
       try {
         final headers = await getAuthHeaders();
-        // [수정] 폴링 API 주소는 그대로 유지 (body 파싱 방식이 변경됨)
+        // [수정] 결과 폴링 API 주소 변경
         final response = await httpClient.post(
-          Uri.parse('$baseUrl/api/v1/detection/polling'),
+          Uri.parse('$baseUrl/api/v1/detection/result/polling'),
           headers: headers,
           body: {'requestId': requestId},
         );
 
-        final rawBody = utf8.decode(response.bodyBytes);
-        print("Polling 응답 ($pollCount회차): $rawBody");
-
+        // 202: 처리 중, 200: 완료
         if (response.statusCode == 200) {
-          // [수정] 200 OK가 떨어지면 분석 완료로 간주하고 데이터 파싱
-          // 문서에 따르면 성공 시 바로 결과 JSON이 옴
+          final rawBody = utf8.decode(response.bodyBytes);
           final body = json.decode(rawBody);
-
-          // 데이터 파싱 (변경된 API 구조 반영)
-          // 예시: {"resultId": 123, "durationSec": 15.5, "probabilityReal": 0.12, "probabilityFake": 0.88, ...}
 
           timer.cancel();
 
-          double rProb = 0.0;
-          double fProb = 0.0;
-          double duration = 0.0;
-
-          if (body is Map) {
-            // [중요] 기존 probabilities['real'] 방식에서 -> probabilityReal (Flat 필드)로 변경
-            rProb = (body['probabilityReal'] ?? 0.0).toDouble();
-            fProb = (body['probabilityFake'] ?? 0.0).toDouble();
-
-            if (body.containsKey('durationSec')) {
-              duration = (body['durationSec'] as num).toDouble();
-            }
+          // 서버의 DetectionBriefResponse 파싱
+          String? resultIdStr;
+          if (body.containsKey('resultId')) {
+            resultIdStr = body['resultId'].toString();
           }
 
-          _finishAnalysisSuccess(rProb, fProb, duration, requestId);
+          // 확률 정보 매핑 (BriefResponse 필드명 확인 필요, 여기선 일반적인 키값 사용)
+          double rProb = (body['probabilityReal'] ?? 0.0).toDouble();
+          double fProb = (body['probabilityFake'] ?? 0.0).toDouble();
+          double duration = 0.0;
+          if (body.containsKey('durationSec')) {
+            duration = (body['durationSec'] as num).toDouble();
+          }
+
+          _finishAnalysisSuccess(rProb, fProb, duration, resultIdStr);
         } else if (response.statusCode == 202) {
-          // 202 Accepted: 아직 처리 중
           print("서버 처리 중... ($pollCount회차)");
         } else if (response.statusCode == 401) {
           timer.cancel();
           _finishAnalysis(false, "세션 만료: 다시 로그인해주세요.");
         } else {
-          // 실패 혹은 에러
-          // 만약 status: FAILED 같은 응답이 온다면 여기서 처리
           timer.cancel();
           _finishAnalysis(false, "분석 실패 또는 오류 (${response.statusCode})");
         }
       } catch (e) {
         print("폴링 통신 오류: $e");
+        // 에러가 나도 타이머를 바로 끄진 않고 다음 틱을 기다리거나, 심각한 에러면 종료
       }
     });
   }
 
-  // 성공 시 처리
   void _finishAnalysisSuccess(
     double real,
     double fake,
     double duration,
-    String requestId,
+    String? resultId,
   ) {
     setState(() {
       _isAnalyzing = false;
       _analysisStatusText = "";
-      _showResult = true; // 결과 표시 ON
+      _showResult = true;
       _realProb = real;
       _fakeProb = fake;
-      _finalResultId = requestId;
+      _finalResultId = resultId; // [중요] 상세페이지용 ResultID 저장
       _isFakeResult = fake > 0.5;
     });
 
@@ -269,7 +276,6 @@ class _DetectionTabState extends State<DetectionTab> {
     );
   }
 
-  // 실패 시 처리
   void _finishAnalysis(bool success, String message) {
     setState(() {
       _isAnalyzing = false;
@@ -316,7 +322,6 @@ class _DetectionTabState extends State<DetectionTab> {
 
           const SizedBox(height: 30),
 
-          // [입력 폼] - 언제나 표시 (다음 영상 바로 분석 가능하게)
           const Text(
             'URL로 탐지하기',
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -336,7 +341,7 @@ class _DetectionTabState extends State<DetectionTab> {
                         _urlController.clear();
                         setState(() {
                           _selectedFilePath = null;
-                          _showResult = false; // 입력 변경 시 결과 숨김
+                          _showResult = false;
                         });
                       },
               ),
@@ -405,12 +410,11 @@ class _DetectionTabState extends State<DetectionTab> {
     );
   }
 
-  // 결과 표시 위젯 (게이지 바 + 상세 버튼)
+  // 결과 표시 위젯
   Widget _buildResultCard() {
     int realPercent = (_realProb * 100).round();
     int fakePercent = (_fakeProb * 100).round();
 
-    // 게이지 바 비율 계산 (최소 10%는 보이게 보정)
     int flexReal = realPercent < 10 ? 10 : realPercent;
     int flexFake = fakePercent < 10 ? 10 : fakePercent;
     if (realPercent == 0 && fakePercent == 0) {
@@ -424,14 +428,60 @@ class _DetectionTabState extends State<DetectionTab> {
         color: Colors.white,
         border: Border.all(color: Colors.grey.shade300),
         borderRadius: BorderRadius.circular(15),
-        boxShadow: [
+        boxShadow: const [
           BoxShadow(color: Colors.black12, blurRadius: 10, spreadRadius: 2),
         ],
       ),
       child: Column(
         children: [
-          // 1. 썸네일 & 제목
-          Icon(Icons.video_library_rounded, size: 50, color: Colors.blueGrey),
+          // 1. [수정] 썸네일 표시 (FutureBuilder 사용)
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: SizedBox(
+              height: 200,
+              width: double.infinity,
+              child: _currentRequestId != null
+                  ? FutureBuilder<Uint8List?>(
+                      // RequestID로 썸네일 요청
+                      future: _fetchThumbnailBytes(_currentRequestId!),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return Container(
+                            color: Colors.grey.shade100,
+                            child: const Center(
+                              child: CircularProgressIndicator(),
+                            ),
+                          );
+                        }
+                        if (snapshot.hasData && snapshot.data != null) {
+                          return Image.memory(
+                            snapshot.data!,
+                            fit: BoxFit.cover,
+                          );
+                        }
+                        // 썸네일 로드 실패 시 기본 아이콘
+                        return Container(
+                          color: Colors.grey.shade200,
+                          child: const Icon(
+                            Icons.broken_image,
+                            size: 50,
+                            color: Colors.grey,
+                          ),
+                        );
+                      },
+                    )
+                  : Container(
+                      color: Colors.grey.shade200,
+                      child: const Icon(
+                        Icons.video_library_rounded,
+                        size: 50,
+                        color: Colors.blueGrey,
+                      ),
+                    ),
+            ),
+          ),
+
           const SizedBox(height: 10),
           Text(
             _videoName,
@@ -446,10 +496,10 @@ class _DetectionTabState extends State<DetectionTab> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              // FAKE 쪽
+              // FAKE
               Column(
                 children: [
-                  Icon(
+                  const Icon(
                     Icons.warning_amber_rounded,
                     color: Colors.red,
                     size: 28,
@@ -457,7 +507,7 @@ class _DetectionTabState extends State<DetectionTab> {
                   Text(
                     "FAKE\n$fakePercent%",
                     textAlign: TextAlign.center,
-                    style: TextStyle(
+                    style: const TextStyle(
                       color: Colors.red,
                       fontWeight: FontWeight.bold,
                       fontSize: 12,
@@ -465,8 +515,7 @@ class _DetectionTabState extends State<DetectionTab> {
                   ),
                 ],
               ),
-
-              // 바
+              // Bar
               Expanded(
                 child: Container(
                   height: 15,
@@ -488,11 +537,10 @@ class _DetectionTabState extends State<DetectionTab> {
                   ),
                 ),
               ),
-
-              // REAL 쪽
+              // REAL
               Column(
                 children: [
-                  Icon(
+                  const Icon(
                     Icons.check_circle_outline,
                     color: Colors.green,
                     size: 28,
@@ -500,7 +548,7 @@ class _DetectionTabState extends State<DetectionTab> {
                   Text(
                     "REAL\n$realPercent%",
                     textAlign: TextAlign.center,
-                    style: TextStyle(
+                    style: const TextStyle(
                       color: Colors.green,
                       fontWeight: FontWeight.bold,
                       fontSize: 12,
@@ -532,9 +580,14 @@ class _DetectionTabState extends State<DetectionTab> {
                 if (_finalResultId != null) {
                   Navigator.of(context).push(
                     MaterialPageRoute(
+                      // [중요] ResultDetailPage는 이제 resultId를 받음
                       builder: (context) =>
-                          ResultDetailPage(requestId: _finalResultId!),
+                          ResultDetailPage(resultId: _finalResultId!),
                     ),
+                  );
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("상세 정보를 확인할 수 없습니다.")),
                   );
                 }
               },

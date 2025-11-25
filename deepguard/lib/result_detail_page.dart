@@ -4,9 +4,10 @@ import 'http_client.dart';
 import 'dart:convert';
 
 class ResultDetailPage extends StatefulWidget {
-  final String requestId; // API 문서상 resultId와 동일하게 취급
+  // [수정] requestId 대신 resultId를 받습니다.
+  final String resultId;
 
-  const ResultDetailPage({super.key, required this.requestId});
+  const ResultDetailPage({super.key, required this.resultId});
 
   @override
   State<ResultDetailPage> createState() => _ResultDetailPageState();
@@ -17,22 +18,25 @@ class _ResultDetailPageState extends State<ResultDetailPage> {
   bool _isReportLoading = true;
 
   Map<String, dynamic>? _resultData;
-  List<dynamic> _reportImages = []; // 보고서 이미지 리스트
+  List<dynamic> _reportImages = [];
+
+  // [추가] 이미지 로딩 시 사용할 인증 헤더
+  Map<String, String>? _imageHeaders;
 
   @override
   void initState() {
     super.initState();
     _fetchDetail();
-    _fetchReport(); // 보고서 이미지 가져오기
+    _fetchReport();
   }
 
-  // 1. 상세 정보 가져오기 (API 경로 및 파싱 수정)
+  // 1. 상세 정보 가져오기
   Future<void> _fetchDetail() async {
     try {
       final headers = await getAuthHeaders();
-      // [수정] API 경로 변경: /api/v1/detection/record -> /api/v1/record
+      // [수정] API 경로 변경: /api/v1/record/{resultId}
       final response = await httpClient.get(
-        Uri.parse('$baseUrl/api/v1/detection/record/${widget.requestId}'),
+        Uri.parse('$baseUrl/api/v1/record/${widget.resultId}'),
         headers: headers,
       );
 
@@ -43,7 +47,7 @@ class _ResultDetailPageState extends State<ResultDetailPage> {
         });
       } else {
         setState(() => _isLoading = false);
-        print('상세 조회 실패: ${response.statusCode}');
+        print('상세 조회 실패: ${response.statusCode} / ${response.body}');
       }
     } catch (e) {
       print('상세 조회 에러: $e');
@@ -51,15 +55,15 @@ class _ResultDetailPageState extends State<ResultDetailPage> {
     }
   }
 
-  // 2. [추가] 보고서 이미지 가져오기
+  // 2. 보고서 이미지 가져오기
   Future<void> _fetchReport() async {
     try {
+      // [중요] 인증 헤더를 가져옵니다.
       final headers = await getAuthHeaders();
-      // [추가] 보고서 API 호출
+
+      // [수정] API 경로 변경: /api/v1/record/{resultId}/report
       final response = await httpClient.get(
-        Uri.parse(
-          '$baseUrl/api/v1/detection/record/${widget.requestId}/report',
-        ),
+        Uri.parse('$baseUrl/api/v1/record/${widget.resultId}/report'),
         headers: headers,
       );
 
@@ -73,10 +77,14 @@ class _ResultDetailPageState extends State<ResultDetailPage> {
               (a, b) => (a['sequence'] ?? 0).compareTo(b['sequence'] ?? 0),
             );
             _isReportLoading = false;
+            _imageHeaders = headers; // [추가] 헤더 저장 (나중에 Image.network에서 사용)
           });
+        } else {
+          setState(() => _isReportLoading = false);
         }
       } else {
         setState(() => _isReportLoading = false);
+        print('보고서 조회 실패: ${response.statusCode}');
       }
     } catch (e) {
       print('보고서 조회 에러: $e');
@@ -93,24 +101,20 @@ class _ResultDetailPageState extends State<ResultDetailPage> {
       return const Scaffold(body: Center(child: Text("결과를 불러올 수 없습니다.")));
     }
 
-    // 데이터 매핑 (API 문서 참고)
-    // verdict: "real" or "fake"
+    // 데이터 매핑
     final String verdict = _resultData!['verdict'] ?? "unknown";
     final bool isFake = verdict.toLowerCase() == "fake";
 
-    // 확률
     final double probReal = (_resultData!['probabilityReal'] ?? 0.0).toDouble();
     final double probFake = (_resultData!['probabilityFake'] ?? 0.0).toDouble();
     final double confidence = (_resultData!['confidence'] ?? 0.0).toDouble();
 
-    // 요약 정보
     final String summaryTitle = _resultData!['summaryTitle'] ?? "분석 완료";
     final String summaryReason = _resultData!['summaryPrimaryReason'] ?? "-";
     final String summaryDetail =
         _resultData!['summaryDetailedExplanation'] ?? "";
     final String riskLevel = _resultData!['summaryRiskLevel'] ?? "unknown";
 
-    // 프레임 정보
     final int suspiciousCount = _resultData!['suspiciousFrameCount'] ?? 0;
     final double suspiciousRatio = (_resultData!['suspiciousFrameRatio'] ?? 0.0)
         .toDouble();
@@ -173,7 +177,7 @@ class _ResultDetailPageState extends State<ResultDetailPage> {
             _buildInfoRow("Fake 확률", "${(probFake * 100).toStringAsFixed(1)}%"),
             _buildInfoRow(
               "의심 프레임",
-              "$suspiciousCount장 (전체의 ${suspiciousRatio.toStringAsFixed(1)}%)",
+              "$suspiciousCount장 (전체의 ${(suspiciousRatio * 100).toStringAsFixed(1)}%)",
             ),
             _buildInfoRow("주요 원인", summaryReason),
 
@@ -224,9 +228,10 @@ class _ResultDetailPageState extends State<ResultDetailPage> {
                     ),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(8),
-                      // 이미지 로드 (네트워크 이미지)
+                      // [수정] Image.network에 headers 추가하여 권한 문제 해결
                       child: Image.network(
                         img['url'],
+                        headers: _imageHeaders, // 저장해둔 인증 헤더 사용
                         width: double.infinity,
                         fit: BoxFit.cover,
                         loadingBuilder: (context, child, loadingProgress) {
@@ -240,6 +245,7 @@ class _ResultDetailPageState extends State<ResultDetailPage> {
                           );
                         },
                         errorBuilder: (context, error, stackTrace) {
+                          print("이미지 로드 실패 ($error) URL: ${img['url']}");
                           return Container(
                             height: 100,
                             alignment: Alignment.center,
