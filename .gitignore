@@ -27,3 +27,30 @@ node_modules/
 # Task files
 # tasks.json
 # tasks/ 
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+*.egg
+.pytest_cache/
+.mypy_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Model outputs (large files)
+*.pth
+*.onnx
+*.pt
+*.h5
+
+# Preprocessed data
+*.npz
+
+# Cache
+cache/

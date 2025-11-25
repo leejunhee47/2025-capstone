@@ -20,7 +20,7 @@ from typing import Dict, List, Optional, Tuple, Any
 import warnings
 
 # Import Korean phoneme filtering
-from ..utils.korean_phoneme_config import get_phoneme_vocab, is_kept_phoneme
+from ..utils.korean_phoneme_config import get_phoneme_vocab, is_kept_phoneme, phoneme_to_korean
 
 # Suppress matplotlib warnings
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -329,7 +329,7 @@ class PIAVisualizer:
         title: Optional[str] = None
     ) -> plt.Figure:
         """
-        Plot geometry (MAR) analysis with abnormality detection.
+        Plot geometry (MAR) analysis with abnormality detection using bar chart.
 
         Args:
             result: XAI result dictionary
@@ -340,7 +340,7 @@ class PIAVisualizer:
             Matplotlib figure
         """
         if ax is None:
-            fig, ax = plt.subplots(figsize=self.figsize)
+            fig, ax = plt.subplots(figsize=(14, 8))
         else:
             fig = ax.figure
 
@@ -349,47 +349,118 @@ class PIAVisualizer:
         mean_mar = geom_analysis['mean_mar']
         std_mar = geom_analysis['std_mar']
         abnormal_phonemes = geom_analysis.get('abnormal_phonemes', [])
-
-        # Create summary text box
-        summary_text = f"""
-        MAR 통계:
-        - Mean: {mean_mar:.4f}
-        - Std: {std_mar:.4f}
-        - Abnormal: {len(abnormal_phonemes)}/14
-        """
-
-        ax.text(
-            0.5, 0.7, summary_text.strip(),
-            ha='center', va='center',
-            fontsize=12,
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
-            transform=ax.transAxes
-        )
-
-        # List abnormal phonemes
-        if abnormal_phonemes:
-            abnormal_text = "이상 음소:\n" + "\n".join([
-                f"- {p['phoneme']} ({p['phoneme_mfa']}): {p['measured_mar']:.4f} "
-                f"(예상: {p['expected_range'][0]:.2f}-{p['expected_range'][1]:.2f})"
-                for p in abnormal_phonemes[:5]  # Show top 5
-            ])
-
-            ax.text(
-                0.5, 0.3, abnormal_text,
-                ha='center', va='top',
-                fontsize=10,
-                color='red',
-                bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.7),
-                transform=ax.transAxes
-            )
-
-        ax.axis('off')
-
-        # Set title
+        
+        # 모든 phoneme에 대한 정보 수집 (abnormal + normal)
+        # phoneme_vocab에서 모든 phoneme 가져오기
+        phoneme_vocab = get_phoneme_vocab()
+        
+        # abnormal_phonemes를 딕셔너리로 변환 (빠른 조회용)
+        abnormal_dict = {p['phoneme_mfa']: p for p in abnormal_phonemes}
+        
+        # 시각화용 데이터 준비
+        phoneme_names = []
+        measured_mar_values = []
+        expected_min_values = []
+        expected_max_values = []
+        expected_mean_values = []
+        colors = []
+        z_scores = []
+        
+        for phoneme_mfa in phoneme_vocab:
+            phoneme_kr = phoneme_to_korean(phoneme_mfa)
+            phoneme_names.append(phoneme_kr)
+            
+            if phoneme_mfa in abnormal_dict:
+                # 이상 phoneme
+                abnormal = abnormal_dict[phoneme_mfa]
+                measured_mar_values.append(abnormal['measured_mar'])
+                expected_min_values.append(abnormal['expected_range'][0])
+                expected_max_values.append(abnormal['expected_range'][1])
+                expected_mean_values.append(abnormal['expected_mean'])
+                z_score = abs(abnormal.get('z_score', 0))
+                z_scores.append(z_score)
+                
+                # Z-score에 따라 색상 결정
+                if z_score > 3:
+                    colors.append('#d32f2f')  # 진한 빨강 (critical)
+                elif z_score > 2:
+                    colors.append('#ff6f00')  # 주황 (high)
+                else:
+                    colors.append('#fbc02d')  # 노랑 (medium)
+            else:
+                # 정상 phoneme
+                measured_mar_values.append(None)
+                expected_min_values.append(None)
+                expected_max_values.append(None)
+                expected_mean_values.append(None)
+                z_scores.append(0)
+                colors.append('#4caf50')  # 녹색 (정상)
+        
+        # Bar chart 그리기
+        x_pos = np.arange(len(phoneme_names))
+        width = 0.6
+        
+        # 먼저 기대 범위 배경 표시 (모든 phoneme에 대해)
+        for i, (name, min_val, max_val, mean_val) in enumerate(
+            zip(phoneme_names, expected_min_values, expected_max_values, expected_mean_values)
+        ):
+            if min_val is not None and max_val is not None:
+                # P10-P90 범위 (회색 영역)
+                ax.bar(i, max_val - min_val, width, bottom=min_val,
+                       color='lightgray', alpha=0.3, edgecolor='gray', linewidth=0.5, zorder=1)
+                # 기대 평균 (점선)
+                ax.plot([i-width/2, i+width/2], [mean_val, mean_val],
+                       color='blue', linestyle='--', linewidth=1.5, alpha=0.6, zorder=2)
+        
+        # 측정값 막대 (abnormal만 표시, 정상은 회색으로 표시)
+        for i, (name, measured, color) in enumerate(zip(phoneme_names, measured_mar_values, colors)):
+            if measured is not None:
+                # 이상 phoneme
+                ax.bar(
+                    i, measured, width,
+                    color=color, alpha=0.7,
+                    edgecolor='black', linewidth=1.5,
+                    zorder=3
+                )
+            else:
+                # 정상 phoneme (작은 회색 막대로 표시)
+                # 전체 평균값으로 표시
+                ax.bar(
+                    i, mean_mar, width * 0.5,
+                    color='#4caf50', alpha=0.4,
+                    edgecolor='gray', linewidth=0.5,
+                    zorder=2
+                )
+        
+        # X축 설정
+        ax.set_xlabel('음소 (Phoneme)', fontsize=12, fontweight='bold')
+        ax.set_ylabel('MAR 값 (Mouth Aspect Ratio)', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(phoneme_names, rotation=0, ha='center', fontsize=10)
+        ax.grid(True, alpha=0.3, axis='y')
+        
+        # 범례 추가
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor='#4caf50', alpha=0.7, label='정상'),
+            Patch(facecolor='#fbc02d', alpha=0.7, label='이상 (중간)'),
+            Patch(facecolor='#ff6f00', alpha=0.7, label='이상 (높음)'),
+            Patch(facecolor='#d32f2f', alpha=0.7, label='이상 (심각)'),
+        ]
+        ax.legend(handles=legend_elements, loc='upper right', fontsize=9)
+        
+        # 제목 설정
         if title is None:
-            title = 'Geometry (MAR) 분석'
+            title = f'MAR Deviation 분석 (이상: {len(abnormal_phonemes)}/14)'
         ax.set_title(title, fontsize=14, weight='bold', pad=15)
-
+        
+        # 통계 정보 텍스트 박스
+        stats_text = f"전체 MAR 평균: {mean_mar:.3f}\n표준편차: {std_mar:.3f}"
+        ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
+                fontsize=10, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        plt.tight_layout()
         return fig
 
     def plot_detection_summary(
@@ -415,9 +486,12 @@ class PIAVisualizer:
             fig = ax.figure
 
         # Extract detection info
-        detection = result['detection']
-        pred_label = detection['prediction_label']
-        confidence = detection['confidence'] * 100
+        detection = result.get('detection', {})
+        verdict = detection.get('verdict', 'unknown')
+        pred_label = detection.get('prediction_label')
+        if pred_label is None:
+            pred_label = 'FAKE' if verdict == 'fake' else 'REAL'
+        confidence = detection.get('confidence', 0.0) * 100
 
         # Determine color
         color = self.colors['fake'] if pred_label == 'FAKE' else self.colors['real']
@@ -439,7 +513,8 @@ class PIAVisualizer:
         )
 
         # Add summary
-        summary = result['summary']['overall']
+        summary_dict = result.get('summary', {})
+        summary = summary_dict.get('primary_reason') or summary_dict.get('detailed_explanation', '')
         ax.text(
             0.5, 0.15, summary,
             ha='center', va='center',
@@ -615,16 +690,31 @@ class PIAVisualizer:
         plt.tight_layout()
         figures['phoneme_attention'] = fig2
 
-        # 3. Temporal Heatmap Comparison
+        # 3. Geometry Analysis Comparison (Temporal Heatmap 대체)
+        # [DEPRECATED] Temporal Heatmap은 단순히 attention score를 5프레임에 복제한 것으로
+        # 실제 시간 변화를 보여주지 않아 유용성이 낮음
+        # Geometry Analysis는 실제 MAR deviation과 Z-score 기반 이상 탐지를 제공
         fig3, axes = plt.subplots(2, 2, figsize=(18, 14))
-        fig3.suptitle('시간별 Attention 비교 (4 Cases)', fontsize=16, weight='bold')
+        fig3.suptitle('MAR Deviation 분석 비교 (4 Cases)', fontsize=16, weight='bold')
 
         for idx, (case_name, result) in enumerate(results.items()):
             ax = axes[idx // 2, idx % 2]
-            self.plot_temporal_heatmap(result, ax=ax, title=f'{case_name.upper()}')
+            self.plot_geometry_analysis(result, ax=ax, title=f'{case_name.upper()}')
 
         plt.tight_layout()
-        figures['temporal_heatmap'] = fig3
+        figures['geometry_analysis'] = fig3
+
+        # [DEPRECATED] Temporal Heatmap - 주석 처리
+        # # 3. Temporal Heatmap Comparison
+        # fig3, axes = plt.subplots(2, 2, figsize=(18, 14))
+        # fig3.suptitle('시간별 Attention 비교 (4 Cases)', fontsize=16, weight='bold')
+        #
+        # for idx, (case_name, result) in enumerate(results.items()):
+        #     ax = axes[idx // 2, idx % 2]
+        #     self.plot_temporal_heatmap(result, ax=ax, title=f'{case_name.upper()}')
+        #
+        # plt.tight_layout()
+        # figures['temporal_heatmap'] = fig3
 
         # 4. Detection Summary Comparison
         fig4, axes = plt.subplots(2, 2, figsize=(14, 10))

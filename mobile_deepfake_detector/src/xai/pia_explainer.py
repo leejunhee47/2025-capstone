@@ -584,13 +584,17 @@ class PIAExplainer:
                     else:
                         severity = "low"  # within 2 std devs
 
+                    deviation = float(phoneme_mar - expected_mean)
+                    deviation_percent = abs(deviation / expected_mean * 100) if expected_mean > 0 else 0
+                    
                     abnormal_phonemes.append({
                         'phoneme': phoneme_to_korean.get(phoneme, phoneme),
                         'phoneme_mfa': phoneme,
                         'measured_mar': float(phoneme_mar),
                         'expected_mean': expected_mean,
                         'expected_range': [expected_min, expected_max],
-                        'deviation': float(phoneme_mar - expected_mean),
+                        'deviation': deviation,
+                        'deviation_percent': deviation_percent,
                         'z_score': float(z_score),
                         'severity': severity,
                         'explanation': self._generate_mar_explanation(
@@ -600,14 +604,19 @@ class PIAExplainer:
             else:
                 # Fallback: use simple range check if baseline not available
                 expected_min, expected_max = 0.15, 0.45
+                expected_mean_fallback = 0.30
                 if not (expected_min <= phoneme_mar <= expected_max):
+                    deviation = float(phoneme_mar - expected_mean_fallback)
+                    deviation_percent = abs(deviation / expected_mean_fallback * 100) if expected_mean_fallback > 0 else 0
+                    
                     abnormal_phonemes.append({
                         'phoneme': phoneme_to_korean.get(phoneme, phoneme),
                         'phoneme_mfa': phoneme,
                         'measured_mar': float(phoneme_mar),
-                        'expected_mean': 0.30,
+                        'expected_mean': expected_mean_fallback,
                         'expected_range': [expected_min, expected_max],
-                        'deviation': float(phoneme_mar - 0.30),
+                        'deviation': deviation,
+                        'deviation_percent': deviation_percent,
                         'z_score': 0.0,
                         'severity': 'unknown',
                         'explanation': f'Baseline 없음 (측정값: {phoneme_mar:.3f})'
@@ -771,6 +780,39 @@ class PIAExplainer:
         """
         from datetime import datetime
 
+        # [DEPRECATED] Temporal Analysis 제거 - Temporal Heatmap은 단순히 attention score를 5프레임에 복제한 것으로
+        # 실제 시간 변화를 보여주지 않아 유용성이 낮음
+        # Geometry Analysis는 실제 MAR deviation과 Z-score 기반 이상 탐지를 제공
+
+        # Geometry Analysis에 시각화 정보 추가
+        geometry_analysis_with_viz = geometry_analysis.copy()
+        if 'abnormal_phonemes' in geometry_analysis and len(geometry_analysis['abnormal_phonemes']) > 0:
+            visualization_summary = []
+            for phoneme_info in geometry_analysis['abnormal_phonemes']:
+                phoneme = phoneme_info.get('phoneme', '')
+                deviation = phoneme_info.get('deviation', 0)
+                deviation_percent = phoneme_info.get('deviation_percent', abs(deviation / phoneme_info.get('expected_mean', 1) * 100) if phoneme_info.get('expected_mean', 0) > 0 else 0)
+                
+                if deviation > 0:
+                    viz_desc = f"'{phoneme}' 발음 시 입을 {deviation_percent:.1f}% 더 크게 벌렸습니다"
+                else:
+                    viz_desc = f"'{phoneme}' 발음 시 입을 {deviation_percent:.1f}% 더 작게 벌렸습니다"
+                
+                visualization_summary.append({
+                    'phoneme': phoneme,
+                    'description': viz_desc,
+                    'severity': phoneme_info.get('severity', 'unknown'),
+                    'deviation_percent': deviation_percent,
+                    'measured_mar': phoneme_info.get('measured_mar', 0),
+                    'expected_mar': phoneme_info.get('expected_mean', 0)
+                })
+            
+            geometry_analysis_with_viz['visualization'] = {
+                'summary': visualization_summary,
+                'plot_type': 'mar_deviation_bar_chart',
+                'description': 'MAR Deviation 분석: 각 음소별 입 벌림 정도를 정상 범위와 비교하여 시각화'
+            }
+
         return {
             'metadata': {
                 'timestamp': datetime.now().isoformat(),
@@ -797,13 +839,14 @@ class PIAExplainer:
                 'phoneme_scores': phoneme_scores,
                 'top_suspicious_phonemes': self._get_top_phonemes(phoneme_scores, 3)
             },
-            'temporal_analysis': {
-                'heatmap': temporal_heatmap,
-                'peak_frames': [],  # TODO: Implement
-                'frame_probabilities': temporal_probs['frame_probabilities'],
-                'interval_probabilities': temporal_probs['interval_probabilities']
-            },
-            'geometry_analysis': geometry_analysis,
+            # [DEPRECATED] temporal_analysis 제거
+            # 'temporal_analysis': {
+            #     'heatmap': temporal_heatmap,
+            #     'peak_frames': [],
+            #     'frame_probabilities': temporal_probs['frame_probabilities'],
+            #     'interval_probabilities': temporal_probs['interval_probabilities']
+            # },
+            'geometry_analysis': geometry_analysis_with_viz,
             'model_info': {
                 'architecture': 'PIA',
                 'branches': ['visual', 'geometry', 'identity'],

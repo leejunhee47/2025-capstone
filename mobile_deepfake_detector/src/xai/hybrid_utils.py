@@ -137,22 +137,25 @@ def group_consecutive_frames(
 def resample_frames_to_pia_format(
     frames: np.ndarray,
     timestamps: np.ndarray,
-    phonemes: List[Dict],
+    phoneme_labels: np.ndarray,  # [NEW] Frame-level phoneme labels
     target_phonemes: int = 14,
-    frames_per_phoneme: int = 5
+    frames_per_phoneme: int = 5,
+    phonemes: Optional[List[Dict]] = None  # Keep for compatibility but unused
 ) -> Tuple[np.ndarray, List[str], np.ndarray]:
     """
     Resample suspicious interval frames to PIA 14×5 format.
 
     Uses the same grouping logic as KoreanPhonemeDataset._group_by_phoneme.
+    
+    [UPDATED] Now uses frame-level phoneme labels directly to match training behavior.
 
     Args:
         frames: (N, H, W, 3) - Suspicious frames
         timestamps: (N,) - Frame timestamps (seconds)
-        phonemes: List of phoneme dicts from aligner
-            [{'phoneme': 'ㅊ', 'start': 1.2, 'end': 1.4}, ...]
+        phoneme_labels: (N,) - Frame-level phoneme labels
         target_phonemes: 14 (PIA expects 14 phonemes)
         frames_per_phoneme: 5 (PIA expects 5 frames per phoneme)
+        phonemes: Deprecated, kept for backward compatibility
 
     Returns:
         resampled_frames: (14, 5, H, W, 3)
@@ -165,14 +168,23 @@ def resample_frames_to_pia_format(
     # Group frames by phoneme (reuse dataset logic)
     by_phoneme = {p: [] for p in phoneme_vocab}
 
-    for frame_idx, ts in enumerate(timestamps):
-        # Find phoneme for this timestamp
-        for p_dict in phonemes:
-            if p_dict['start'] <= ts <= p_dict['end']:
-                phoneme = p_dict['phoneme']
-                if is_kept_phoneme(phoneme):
-                    by_phoneme[phoneme].append(frames[frame_idx])
-                break
+    # [NEW] Use frame-level labels directly (matches KoreanPhonemeDataset behavior)
+    matched_count = 0
+    for frame_idx in range(len(frames)):
+        # Handle potential length mismatch if labels are shorter/longer
+        if frame_idx >= len(phoneme_labels):
+            break
+
+        phoneme = str(phoneme_labels[frame_idx]).strip()
+
+        if is_kept_phoneme(phoneme):
+            by_phoneme[phoneme].append(frames[frame_idx])
+            matched_count += 1
+            
+    # [DEBUG] Log matching statistics
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"[DEBUG] resample_frames_to_pia_format: {matched_count}/{len(frames)} frames matched to kept phonemes")
 
     # Build 14×5 grid with valid mask tracking
     resampled = np.zeros((target_phonemes, frames_per_phoneme, H, W, C), dtype=frames.dtype)
@@ -737,15 +749,17 @@ def format_stage2_to_interface(
                 'top_phoneme': '',
                 'total_phonemes': 0
             },
-            'temporal_analysis': {
-                'heatmap_data': [],
-                'high_risk_points': [],
-                'statistics': {
-                    'mean_fake_prob': 0.0,
-                    'max_fake_prob': 0.0,
-                    'high_risk_count': 0
-                }
-            },
+            # [DEPRECATED] temporal_analysis 제거 - Temporal Heatmap은 단순히 attention score를 5프레임에 복제한 것으로
+            # 실제 시간 변화를 보여주지 않아 유용성이 낮음
+            # 'temporal_analysis': {
+            #     'heatmap_data': [],
+            #     'high_risk_points': [],
+            #     'statistics': {
+            #         'mean_fake_prob': 0.0,
+            #         'max_fake_prob': 0.0,
+            #         'high_risk_count': 0
+            #     }
+            # },
             'geometry_analysis': {
                 'statistics': {
                     'mean_mar': 0.0,
@@ -841,30 +855,22 @@ def format_stage2_to_interface(
         'total_phonemes': len(phoneme_scores)
     }
 
-    # 4. Extract temporal analysis
-    temporal_heatmap_data = pia_xai['temporal_analysis']['heatmap']
-
-    # Find high-risk points (fake_prob > 0.5)
+    # 4. [DEPRECATED] Temporal Analysis 제거
+    # Temporal Heatmap은 단순히 attention score를 5프레임에 복제한 것으로
+    # 실제 시간 변화를 보여주지 않아 유용성이 낮음
+    # Geometry Analysis는 실제 MAR deviation과 Z-score 기반 이상 탐지를 제공
+    
+    # high_risk_points는 anomalous_frames에서 사용되므로 빈 리스트로 설정
     high_risk_points = []
-    for phoneme_idx, phoneme_row in enumerate(temporal_heatmap_data):
-        for frame_idx, fake_prob in enumerate(phoneme_row):
-            if fake_prob > 0.5:
-                high_risk_points.append({
-                    'phoneme_index': phoneme_idx,
-                    'frame_index': frame_idx,
-                    'phoneme': phoneme_scores[phoneme_idx]['phoneme_korean'],
-                    'fake_probability': fake_prob
-                })
-
-    # Calculate statistics
-    heatmap_flat = [val for row in temporal_heatmap_data for val in row]
+    
+    # temporal_analysis는 빈 값으로 설정 (하위 호환성 유지)
     temporal_analysis = {
-        'heatmap_data': temporal_heatmap_data,
-        'high_risk_points': high_risk_points,
+        'heatmap_data': [],
+        'high_risk_points': [],
         'statistics': {
-            'mean_fake_prob': float(np.mean(heatmap_flat)),
-            'max_fake_prob': float(np.max(heatmap_flat)),
-            'high_risk_count': len(high_risk_points)
+            'mean_fake_prob': 0.0,
+            'max_fake_prob': 0.0,
+            'high_risk_count': 0
         }
     }
 
@@ -888,18 +894,19 @@ def format_stage2_to_interface(
                 'explanation': f"'{abnormal['phoneme']}' 발음 시 입 벌림 이상 ({deviation_pct:.1f}% 편차)"
             })
 
-    # Anomalous frames (simplified - use high-risk points)
+    # Anomalous frames - geometry_analysis의 abnormal_phonemes에서 가져오기
+    # (temporal_analysis가 제거되었으므로 geometry 기반으로만 구성)
     anomalous_frames = []
-    for hrp in high_risk_points[:5]:  # Top 5 high-risk frames
-        severity = calculate_severity(hrp['fake_probability'])
-        anomalous_frames.append({
-            'frame_index': hrp['frame_index'],
-            'phoneme': hrp['phoneme'],
-            'mar_value': geom_analysis.get('mean_mar', 0.0),
-            'expected_range': [0.3, 0.5],  # Placeholder
-            'deviation_percent': 0.0,  # Placeholder
-            'severity': severity
-        })
+    if 'abnormal_phonemes' in geom_analysis:
+        for abnormal in geom_analysis['abnormal_phonemes'][:5]:  # Top 5 abnormal phonemes
+            anomalous_frames.append({
+                'frame_index': 0,  # Frame-level 정보는 geometry_analysis에 없음
+                'phoneme': abnormal.get('phoneme', ''),
+                'mar_value': abnormal.get('measured_mar', 0.0),
+                'expected_range': abnormal.get('expected_range', [0.0, 1.0]),
+                'deviation_percent': abnormal.get('deviation_percent', 0.0),
+                'severity': abnormal.get('severity', 'unknown')
+            })
 
     geometry_analysis = {
         'statistics': {
@@ -920,6 +927,34 @@ def format_stage2_to_interface(
     # Include original abnormal_phonemes for detailed analysis
     if 'abnormal_phonemes' in geom_analysis:
         geometry_analysis['abnormal_phonemes'] = geom_analysis['abnormal_phonemes']
+    
+    # 시각화 정보 추가
+    if 'abnormal_phonemes' in geom_analysis and len(geom_analysis['abnormal_phonemes']) > 0:
+        visualization_summary = []
+        for phoneme_info in geom_analysis['abnormal_phonemes']:
+            phoneme = phoneme_info.get('phoneme', '')
+            deviation = phoneme_info.get('deviation', 0)
+            deviation_percent = phoneme_info.get('deviation_percent', abs(deviation / phoneme_info.get('expected_mean', 1) * 100) if phoneme_info.get('expected_mean', 0) > 0 else 0)
+            
+            if deviation > 0:
+                viz_desc = f"'{phoneme}' 발음 시 입을 {deviation_percent:.1f}% 더 크게 벌렸습니다"
+            else:
+                viz_desc = f"'{phoneme}' 발음 시 입을 {deviation_percent:.1f}% 더 작게 벌렸습니다"
+            
+            visualization_summary.append({
+                'phoneme': phoneme,
+                'description': viz_desc,
+                'severity': phoneme_info.get('severity', 'unknown'),
+                'deviation_percent': deviation_percent,
+                'measured_mar': phoneme_info.get('measured_mar', 0),
+                'expected_mar': phoneme_info.get('expected_mean', 0)
+            })
+        
+        geometry_analysis['visualization'] = {
+            'summary': visualization_summary,
+            'plot_type': 'mar_deviation_bar_chart',
+            'description': 'MAR Deviation 분석: 각 음소별 입 벌림 정도를 정상 범위와 비교하여 시각화'
+        }
 
     # 6. Build Korean explanation
     korean_summary = pia_xai['summary']
@@ -954,35 +989,31 @@ def format_stage2_to_interface(
 def resample_features_to_grid(
     features: np.ndarray,
     timestamps: np.ndarray,
-    phonemes: List[Dict],
+    phoneme_labels: np.ndarray,  # [NEW] Frame-level labels
     target_phonemes: int = 14,
-    frames_per_phoneme: int = 5
+    frames_per_phoneme: int = 5,
+    phonemes: Optional[List[Dict]] = None  # Deprecated
 ) -> Tuple[np.ndarray, List[str], np.ndarray]:
     """
     Resample features to PIA 14×5 grid format.
 
     Shared utility used by both Stage 2 analyzer and preprocessing pipeline.
     Groups feature frames by phoneme and builds a fixed-size grid.
+    
+    [UPDATED] Now uses frame-level phoneme labels directly to match training behavior.
 
     Args:
         features: (N, D) - Feature array (e.g., MAR, ArcFace embeddings)
         timestamps: (N,) - Frame timestamps in seconds
-        phonemes: List of phoneme dicts with 'phoneme', 'start', 'end' keys
+        phoneme_labels: (N,) - Frame-level phoneme labels
         target_phonemes: Number of phonemes in grid (default: 14)
         frames_per_phoneme: Frames per phoneme slot (default: 5)
+        phonemes: Deprecated, kept for backward compatibility
 
     Returns:
         resampled: (14, 5, D) - Feature grid aligned to phoneme vocabulary
         matched_phonemes: List[str] (length 14) - Phoneme labels or '<pad>'
         valid_mask: (14,) bool array - True if phoneme has actual features, False if padding
-
-    Example:
-        >>> geometry = np.array([[0.5], [0.6], ...])  # (N, 1)
-        >>> timestamps = np.array([0.0, 0.2, 0.4, ...])
-        >>> phonemes = [{'phoneme': 'ㅏ', 'start': 0.0, 'end': 0.5}, ...]
-        >>> grid, matched, mask = resample_features_to_grid(geometry, timestamps, phonemes)
-        >>> grid.shape, mask.sum()
-        ((14, 5, 1), 3)  # Only 3 valid phonemes
     """
     from ..utils.korean_phoneme_config import get_phoneme_vocab, is_kept_phoneme
 
@@ -992,13 +1023,16 @@ def resample_features_to_grid(
     # Group features by phoneme
     by_phoneme = {p: [] for p in phoneme_vocab}
 
-    for frame_idx, ts in enumerate(timestamps):
-        for p_dict in phonemes:
-            if p_dict['start'] <= ts <= p_dict['end']:
-                phoneme = p_dict['phoneme']
-                if is_kept_phoneme(phoneme):
-                    by_phoneme[phoneme].append(features[frame_idx])
-                break
+    # [NEW] Use frame-level labels directly (matches KoreanPhonemeDataset behavior)
+    for frame_idx in range(len(features)):
+        # Handle potential length mismatch
+        if frame_idx >= len(phoneme_labels):
+            break
+
+        phoneme = str(phoneme_labels[frame_idx]).strip()
+
+        if is_kept_phoneme(phoneme):
+            by_phoneme[phoneme].append(features[frame_idx])
 
     # Build 14×5 grid with valid mask tracking
     resampled = np.zeros((target_phonemes, frames_per_phoneme, D), dtype=features.dtype)
@@ -1017,6 +1051,8 @@ def resample_features_to_grid(
 
         for fi, frame_feat in enumerate(frames_list):
             resampled[pi, fi] = frame_feat
+
+    # Post-process: Handle NaN in features with phoneme-wise interpolation
 
     # Post-process: Handle NaN in features with phoneme-wise interpolation
     # This matches the training behavior in phoneme_dataset.py

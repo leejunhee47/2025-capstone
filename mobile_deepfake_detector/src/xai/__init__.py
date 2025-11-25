@@ -12,8 +12,7 @@ from .pia_visualizer import PIAVisualizer
 from .hybrid_pipeline import HybridXAIPipeline
 from .stage1_scanner import Stage1Scanner
 from .stage2_analyzer import Stage2Analyzer
-from .feature_extractor import FeatureExtractor
-from .interval_detector import IntervalDetector
+from .unified_feature_extractor import UnifiedFeatureExtractor
 from .result_aggregator import ResultAggregator
 
 __all__ = [
@@ -23,7 +22,6 @@ __all__ = [
     "HybridXAIPipeline",
     "Stage1Scanner",
     "Stage2Analyzer",
-    "FeatureExtractor",
-    "IntervalDetector",
+    "UnifiedFeatureExtractor",
     "ResultAggregator",
 ]
