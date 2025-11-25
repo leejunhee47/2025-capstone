@@ -17,12 +17,13 @@
    ```bash
    python scripts/check_cuda.py
    ```
-
+   
 3. **Model Checkpoints** (필수):
    - `models/checkpoints/mmms-ba_fulldata_best.pth` (MMMS-BA 모델)
    - `models/checkpoints/pia-best.pth` (PIA 모델)
 
-4. **Test Videos** (자동 생성 가능):
+4. **Test Videos**:
+   - https://drive.google.com/drive/folders/1YBxylEeg4CBRm-479SMTt6s_MIcidZW2?usp=sharing: cache 폴더.
    - `cache/0e105f8ec5146f9737d0_132.mp4` (Real 영상)
    - `cache/0e105f8ec5146f9737d0_026f9b9514f28f37a3fd_2_0035.mp4` (Fake 영상)
 
