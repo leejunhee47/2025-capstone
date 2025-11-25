@@ -1,15 +1,51 @@
 import 'package:flutter/material.dart';
 import 'package:getwidget/getwidget.dart';
+import 'http_client.dart';
+import 'dart:convert';
+import 'result_detail_page.dart'; // [필수] 상세 페이지 임포트
 
-class HistoryTab extends StatelessWidget {
-  final bool isLoggedIn; // 로그인 상태
-
+class HistoryTab extends StatefulWidget {
+  final bool isLoggedIn;
   const HistoryTab({super.key, required this.isLoggedIn});
 
   @override
+  State<HistoryTab> createState() => _HistoryTabState();
+}
+
+class _HistoryTabState extends State<HistoryTab> {
+  List<dynamic> _historyList = [];
+  bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.isLoggedIn) _fetchHistory();
+  }
+
+  Future<void> _fetchHistory() async {
+    setState(() => _isLoading = true);
+    try {
+      final headers = await getAuthHeaders();
+      final response = await httpClient.get(
+        Uri.parse('$baseUrl/api/v1/detection/history'),
+        headers: headers,
+      );
+
+      if (response.statusCode == 200) {
+        setState(() {
+          _historyList = json.decode(utf8.decode(response.bodyBytes));
+        });
+      }
+    } catch (e) {
+      print("히스토리 로드 실패: $e");
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (!isLoggedIn) {
-      // 로그인 안된 경우
+    if (!widget.isLoggedIn) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -33,78 +69,73 @@ class HistoryTab extends StatelessWidget {
           ],
         ),
       );
-    } else {
-      // 로그인 된 경우 (예시 데이터 사용)
-      // TODO: 실제 앱에서는 서버에서 받아온 분석 기록 데이터를 사용
-      final List<Map<String, dynamic>> historyData = [
-        {
-          'title': '분석 영상 1.mp4',
-          'date': '2025-10-22',
-          'result': '위험',
-          'thumbnail': 'https://via.placeholder.com/150/f60',
-        },
-        {
-          'title': 'https://...',
-          'date': '2025-10-21',
-          'result': '주의',
-          'thumbnail': 'https://via.placeholder.com/150/fc0',
-        },
-        {
-          'title': '일상 브이로그.avi',
-          'date': '2025-10-20',
-          'result': '안전',
-          'thumbnail': 'https://via.placeholder.com/150/0c0',
-        },
-        {
-          'title': '뉴스 클립.mov',
-          'date': '2025-10-19',
-          'result': '위험',
-          'thumbnail': 'https://via.placeholder.com/150/f30',
-        },
-      ];
+    }
 
-      if (historyData.isEmpty) {
-        return const Center(
-          child: Text('아직 탐지 기록이 없습니다.', style: TextStyle(color: Colors.grey)),
-        );
-      }
+    if (_isLoading) return const Center(child: CircularProgressIndicator());
 
-      // GetWidget 리스트 타일 사용
-      return ListView.builder(
-        itemCount: historyData.length,
-        itemBuilder: (context, index) {
-          final item = historyData[index];
-          Color resultColor;
-          IconData resultIcon;
-          switch (item['result']) {
-            case '위험':
-              resultColor = GFColors.DANGER;
-              resultIcon = Icons.error_outline;
-              break;
-            case '주의':
-              resultColor = GFColors.WARNING;
-              resultIcon = Icons.warning_amber_rounded;
-              break;
-            default: // 안전
-              resultColor = GFColors.SUCCESS;
-              resultIcon = Icons.check_circle_outline;
-          }
-
-          return GFListTile(
-            avatar: GFAvatar(
-              backgroundImage: NetworkImage(item['thumbnail']),
-              shape: GFAvatarShape.square, // 썸네일은 사각형으로
+    if (_historyList.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Text("탐지 기록이 없습니다."),
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _fetchHistory,
             ),
-            titleText: item['title'],
-            subTitleText: '분석일: ${item['date']}',
-            icon: Icon(resultIcon, color: resultColor), // 결과 아이콘
-            // onTap: () {
-            //   // TODO: 상세 결과 화면으로 이동
-            //   print('${item['title']} 상세 보기');
-            // },
-          );
-        },
+          ],
+        ),
       );
     }
+
+    return RefreshIndicator(
+      onRefresh: _fetchHistory,
+      child: ListView.builder(
+        itemCount: _historyList.length,
+        itemBuilder: (context, index) {
+          final item = _historyList[index];
+          // item: {requestId, date, status, result, title, thumbnail...}
+
+          // 상태에 따른 아이콘/색상 결정
+          bool isCompleted = item['status'] == 'COMPLETED';
+          // (서버가 아직 result를 "안전" 등으로 주지 않고 status만 줄 경우 대비)
+          String resultText = item['result'] ?? item['status'];
+
+          return GFListTile(
+            // [수정됨] icon -> child
+            avatar: const GFAvatar(
+              shape: GFAvatarShape.square,
+              backgroundColor: GFColors.LIGHT,
+              child: Icon(
+                Icons.play_circle_fill,
+                color: Colors.white,
+              ), // 배경색 추가
+            ),
+            titleText: item['title'] ?? '영상 #${item['requestId']}',
+            subTitleText: item['date'],
+            icon: Icon(
+              isCompleted ? Icons.check_circle : Icons.hourglass_empty,
+              color: isCompleted ? Colors.green : Colors.grey,
+            ),
+            description: Text(
+              resultText,
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: resultText == "위험" ? Colors.red : Colors.black54,
+              ),
+            ),
+            onTap: () {
+              // 클릭 시 상세 페이지 이동
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) =>
+                      ResultDetailPage(requestId: item['requestId'].toString()),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
   }
 }

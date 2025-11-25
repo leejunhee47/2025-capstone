@@ -5,7 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 final http.Client httpClient = http.Client();
 
 // 백엔드 서버 주소 (본인의 로컬 환경에 맞게 수정)
-const String baseUrl = "http://220.127.129.63:8080";
+const String baseUrl = "http://121.164.108.44:8080";
 //const String baseUrl = "https://untauntingly-impuissant-amada.ngrok-free.dev";
 
 // 2. [신규] 쿠키가 포함된 헤더를 반환하는 헬퍼 함수

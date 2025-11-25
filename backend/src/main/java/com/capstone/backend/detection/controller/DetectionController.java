@@ -4,6 +4,7 @@ import com.capstone.backend.core.common.SessionConst;
 import com.capstone.backend.detection.exceptions.InvalidRequestId;
 import com.capstone.backend.detection.model.DetectionRequest;
 import com.capstone.backend.detection.model.DetectionStatus;
+import com.capstone.backend.detection.repository.DetectionRequestRepository;
 import com.capstone.backend.detection.response.AiResultResponse;
 import com.capstone.backend.detection.response.AnalysisResultResponse;
 import com.capstone.backend.detection.response.DetectionResponse;
@@ -20,7 +21,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import java.io.*;
-
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @RestController
@@ -30,12 +35,17 @@ public class DetectionController {
     private final Tika tika = new Tika();
     private final DetectionService detectionService;
 
+    private final DetectionRequestRepository detectionRequestRepository;
+
     // [추가] 파일 저장을 위해 컨트롤러에도 uploadDir 주입
     @Value("${file.upload-dir}")
     private String uploadDir;
 
     @Autowired
-    public DetectionController(DetectionService detectionService) { this.detectionService = detectionService; }
+    public DetectionController(DetectionService detectionService, DetectionRequestRepository detectionRequestRepository) { 
+	this.detectionService = detectionService; 
+	this.detectionRequestRepository = detectionRequestRepository;
+    }
 
     @PostMapping("/upload")
     public ResponseEntity<?> processUploadDetectionRequest(@RequestParam("file") MultipartFile file ,
@@ -208,7 +218,66 @@ public class DetectionController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("An unexpected error occurred.");
         }
     }
+    
+    // 탐지 기록 목록 조회
+    @GetMapping("/history")
+    public ResponseEntity<?> getDetectionHistory(@SessionAttribute(value = SessionConst.LOGIN_MEMBER, required = false) Member loginMember) {
+        if (loginMember == null) return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(new ErrorResponse("UNAUTHORIZED", "로그인이 필요합니다."));
 
+        List<DetectionRequest> requests = detectionRequestRepository.findAllByMemberOrderByCreatedAtDesc(loginMember);
+        List<Map<String, Object>> historyList = new ArrayList<>();
+
+        for (DetectionRequest req : requests) {
+            Map<String, Object> item = new HashMap<>();
+            item.put("requestId", req.getRequestId());
+            item.put("date", req.getCreatedAt().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")));
+            item.put("status", req.getStatus().name());
+            
+            // 썸네일이나 제목 등은 실제 데이터가 없으므로 임시 값
+            item.put("title", "분석 영상 #" + req.getRequestId());
+            
+            // 결과 간략 정보 (DB에 저장이 안되어 있으므로 랜덤/임시값 처리)
+            if (req.getStatus() == DetectionStatus.COMPLETED) {
+                item.put("result", "안전"); // 또는 "위험" (나중에 DB에서 가져와야 함)
+            } else {
+                item.put("result", req.getStatus().name());
+            }
+            historyList.add(item);
+        }
+
+        return ResponseEntity.ok(historyList);
+    }
+
+    // 상세 결과 조회
+    @GetMapping("/record/{requestId}")
+    public ResponseEntity<?> getRecordDetail(@PathVariable("requestId") Long requestId,
+                                             @SessionAttribute(value = SessionConst.LOGIN_MEMBER, required = false) Member loginMember) {
+        if (loginMember == null) return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(new ErrorResponse("UNAUTHORIZED", "로그인이 필요합니다."));
+
+        DetectionRequest request = detectionRequestRepository.findById(requestId).orElse(null);
+        if (request == null) return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Not Found");
+
+        // 테스트를 위해 가짜 데이터 설정
+        Map<String, Object> detail = new HashMap<>();
+        detail.put("requestId", request.getRequestId());
+        detail.put("status", request.getStatus().name());
+        detail.put("date", request.getCreatedAt().toString());
+
+        Map<String, Double> probabilities = new HashMap<>();
+        probabilities.put("real", 0.78);
+        probabilities.put("fake", 0.22);
+        
+        detail.put("probabilities", probabilities);
+        detail.put("durationSec", 15.015);
+        detail.put("verdict", "real"); // "real" or "fake"
+
+        Map<String, Object> summary = new HashMap<>();
+        summary.put("title", "진짜 영상으로 판정 (신뢰도: 78.1%)");
+        summary.put("detailed_explanation", "전체 1개 구간을 분석한 결과, 부자연스러운 음성-입모양 불일치가 감지되지 않았습니다.");
+        detail.put("summary", summary);
+
+        return ResponseEntity.ok(detail);
+    }
 
     @GetMapping("/test")
     public ResponseEntity<?> test() {
