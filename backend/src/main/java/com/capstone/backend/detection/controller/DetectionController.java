@@ -4,10 +4,7 @@ import com.capstone.backend.core.common.SessionConst;
 import com.capstone.backend.detection.exceptions.InvalidRequestId;
 import com.capstone.backend.detection.model.DetectionRequest;
 import com.capstone.backend.detection.model.DetectionStatus;
-import com.capstone.backend.detection.response.AiResultResponse;
-import com.capstone.backend.detection.response.AnalysisResultResponse;
-import com.capstone.backend.detection.response.DetectionResponse;
-import com.capstone.backend.detection.response.ErrorResponse;
+import com.capstone.backend.detection.response.*;
 import com.capstone.backend.detection.service.DetectionService;
 import com.capstone.backend.member.model.Member;
 import lombok.extern.slf4j.Slf4j;
@@ -15,29 +12,41 @@ import org.apache.commons.validator.routines.UrlValidator;
 import org.apache.tika.Tika;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value; // @Value 임포트
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
 
 
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/detection")
+@RequestMapping("/api/v1")
 public class DetectionController {
 
     private final Tika tika = new Tika();
     private final DetectionService detectionService;
 
-    // [추가] 파일 저장을 위해 컨트롤러에도 uploadDir 주입
     @Value("${file.upload-dir}")
     private String uploadDir;
+
+    @Value("${result.img}")
+    private String resultImgDir;
+
+
 
     @Autowired
     public DetectionController(DetectionService detectionService) { this.detectionService = detectionService; }
 
-    @PostMapping("/upload")
+    // 클라이언트 -> 백엔드 서버 (업로드)
+    @PostMapping("detection/upload")
     public ResponseEntity<?> processUploadDetectionRequest(@RequestParam("file") MultipartFile file ,
                                                            @RequestParam("callbackUrl") String callbackUrl ,
                                                            @SessionAttribute(value = SessionConst.LOGIN_MEMBER, required = false) Member loginMember){
@@ -86,6 +95,8 @@ public class DetectionController {
             // 2-3. 파일 저장 (동기식으로 먼저 실행)
             file.transferTo(dest);
 
+
+
             // 3. 비동기 처리 시작
             detectionService.startFileDetection(newRequest , dest.getPath());
 
@@ -101,11 +112,12 @@ public class DetectionController {
         }
 
         // 사용자에게 즉시 응답
-        DetectionResponse response = new DetectionResponse(newRequest.getRequestId());
+        DetectionCheckResponse response = new DetectionCheckResponse(newRequest.getRequestId());
         return ResponseEntity.accepted().body(response);
     }
 
-    @PostMapping("/link")
+    // 클라이언트 -> 백엔드 서버 (링크)
+    @PostMapping("detection/link")
     public ResponseEntity<?> processLinkDetectionRequest(@RequestParam("videoUrl") String videoUrl ,
                                                          @RequestParam("callbackUrl") String callbackUrl ,
                                                          @SessionAttribute(value = SessionConst.LOGIN_MEMBER, required = false) Member loginMember){
@@ -146,32 +158,75 @@ public class DetectionController {
         }
 
         // 사용자에게 즉시 응답
-        DetectionResponse response = new DetectionResponse(newRequest.getRequestId());
+        DetectionCheckResponse response = new DetectionCheckResponse(newRequest.getRequestId());
         return ResponseEntity.accepted().body(response);
     }
 
+    // AI 서버 -> 백엔드 서버 (결과: JSON + Images)
+    @PostMapping(value = "detection/result", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> getDetectionResult(
+            @RequestPart("result") AiResultResponse aiResultResponse,
+            @RequestPart(value = "images", required = false) List<MultipartFile> images
+    ) {
+        try {
+            // 1. RequestId 추출 (파일명 생성을 위해)
+            String rawId = aiResultResponse.getMetadata().getRequestId();
+            // 숫자만 추출
+            String requestIdStr = rawId.replaceAll("[^0-9]", "");
 
+            List<String> savedImagePaths = new ArrayList<>();
 
-    @PostMapping("/result")
-    public ResponseEntity<?> getDetectionResult(@RequestBody AiResultResponse aiResultResponse) {
-        String requestId = aiResultResponse.getRequestId();
-        Long fileSize = aiResultResponse.getAnalysisResultResponse().getFileSize();
+            // 2. 이미지 파일 저장 로직
+            if (images != null && !images.isEmpty()) {
+                File dir = new File(resultImgDir);
+                if (!dir.exists()) {
+                    dir.mkdirs();
+                }
 
-        log.info("AI 서버로부터 분석 결과 수신 (RequestId: {})", requestId);
-        log.info("AI 서버로부터 분석 결과 (FileSize: {})", fileSize);
+                int index = 1;
+                for (MultipartFile img : images) {
+                    if (img.isEmpty()) continue;
 
-        detectionService.updateDetectionStatus(Long.parseLong(requestId),DetectionStatus.COMPLETED);
-        // TODO: 수신한 jsonResultBody (JSON 문자열)를 파싱(ObjectMapper 등)하여 데이터베이스에 저장
+                    // 파일명: {requestId}_{index}.jpg (확장자는 원본 따르거나 고정)
+                    // 여기서는 간단히 jpg로 가정하거나 원본 파일명 활용 가능.
+                    // 요구사항: requestId로 식별
+                    String ext = "jpg";
+                    // (필요시) String originalExt = FilenameUtils.getExtension(img.getOriginalFilename());
+
+                    String fileName = requestIdStr + "_" + index + "." + ext;
+                    File dest = new File(resultImgDir + File.separator + fileName);
+
+                    img.transferTo(dest);
+
+                    savedImagePaths.add(dest.getAbsolutePath());
+                    index++;
+                }
+            }
+
+            // 3. 서비스 호출 (JSON 결과 + 저장된 이미지 경로 리스트 전달)
+            detectionService.processDetectionResult(aiResultResponse, savedImagePaths);
+
+        } catch (IOException e) {
+            log.error("이미지 저장 중 오류 발생", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Image save failed");
+        } catch (IllegalArgumentException e) {
+            log.warn("Illegal argument detected: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (Exception e) {
+            log.error("결과 처리 중 알 수 없는 오류 발생", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Server error");
+        }
 
         return ResponseEntity.ok().build();
     }
 
 
-    @PostMapping("/polling")
+    // 백엔드 서버 -> 클라이언트 (간단 결과)
+    @PostMapping("detection/result/polling")
     public ResponseEntity<?> passDetectionResult(@RequestParam("requestId") Long requestId){
 
         try {
-            // 1. Service에서 DetectionRequest 조회
+            // 1. Service 에서 DetectionRequest 조회
             DetectionRequest request = detectionService.getDetectionByRequestId(requestId);
             DetectionStatus status = request.getStatus();
 
@@ -179,8 +234,7 @@ public class DetectionController {
             switch (status) {
                 case COMPLETED:
                     // 완료: 200 OK (성공)
-                    // todo : DB 에서 결과 조회 및 반환
-                    return ResponseEntity.ok(status);
+                    return ResponseEntity.ok(detectionService.getDetectionBriefResponse(requestId));
 
                 case PENDING:
                 case PROCESSING:
@@ -198,7 +252,7 @@ public class DetectionController {
             }
 
         } catch (InvalidRequestId e) {
-            // ID를 찾지 못한 경우 (Service에서 발생시킨 예외): 404 Not Found
+            // ID를 찾지 못한 경우 (Service 에서 발생시킨 예외): 404 Not Found
             log.warn("Polling request for non-existent ID: {}", requestId);
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(e.getMessage());
 
@@ -209,8 +263,185 @@ public class DetectionController {
         }
     }
 
+    // 백엔드 서버 -> 클라이언트 (썸네일)
+    @PostMapping("detection/thumbnail/polling")
+    public ResponseEntity<?> passDetectionThumbnail(@RequestParam("requestId") Long requestId){
 
-    @GetMapping("/test")
+        try {
+            // 1. 요청 정보 조회
+            DetectionRequest request = detectionService.getDetectionByRequestId(requestId);
+            DetectionStatus status = request.getStatus();
+
+            // 2. 상태에 따른 분기 처리
+            switch (status) {
+                case PENDING:
+                    // 아직 썸네일 생성 전 -> 202 Accepted
+                    return ResponseEntity.status(HttpStatus.ACCEPTED).body("Thumbnail generating...");
+
+                case PROCESSING:
+                case COMPLETED:
+                    // 썸네일 생성 완료됨 (Service 로직상 PROCESSING 이면 썸네일 존재) -> 200 OK + Image
+                    String path = request.getThumbnailPath();
+
+                    // 경로 유효성 검사
+                    if (path == null) {
+                        log.error("Status is {}, but thumbnail path is null. RequestID: {}", status, requestId);
+                        return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Thumbnail path not found");
+                    }
+
+                    File file = new File(path);
+                    if (!file.exists()) {
+                        log.error("Thumbnail file missing at path: {}", path);
+                        return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Thumbnail file missing");
+                    }
+
+                    // 이미지 리소스 생성
+                    Resource resource = new FileSystemResource(file);
+
+                    // Content-Type 결정 (기본 jpg 설정, 필요시 파일 probeContentType 사용)
+                    MediaType mediaType = MediaType.IMAGE_JPEG;
+                    try {
+                        String contentType = Files.probeContentType(Paths.get(path));
+                        if (contentType != null) {
+                            mediaType = MediaType.parseMediaType(contentType);
+                        }
+                    } catch (Exception e) {
+                        log.warn("Failed to determine content type, using default image/jpeg");
+                    }
+
+                    return ResponseEntity.ok()
+                            .contentType(mediaType)
+                            .body(resource);
+
+                case FAILED:
+                    // 실패 상태 -> 404 Not Found (클라이언트가 폴링 중단하도록)
+                    return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Detection Failed");
+
+                default:
+                    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Unknown Status");
+            }
+
+        } catch (InvalidRequestId e) {
+            // 잘못된 ID -> 404 Not Found
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(e.getMessage());
+        } catch (Exception e) {
+            log.error("Error retrieving thumbnail for requestId: {}", requestId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Server Error");
+        }
+
+
+    }
+
+    // 백엔드 서버 -> 클라이언트 (상세 결과)
+    @GetMapping("record/{resultId}")
+    public ResponseEntity<?> getDetectionRecordDetail(@PathVariable("resultId") Long resultId) {
+        try {
+            // 1. 서비스 호출하여 상세 정보 가져오기
+            DetectionDetailResponse response = detectionService.getDetectionDetailByResultId(resultId);
+
+            // 2. 200 OK와 함께 데이터 반환
+            return ResponseEntity.ok(response);
+
+        } catch (IllegalArgumentException e) {
+            // 3. ID에 해당하는 결과가 없을 경우 404 Not Found
+            log.warn("Record request for non-existent Result ID: {}", resultId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(e.getMessage());
+
+        } catch (Exception e) {
+            // 4. 기타 서버 에러 500
+            log.error("Error retrieving detection record for resultId: {}", resultId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("An unexpected error occurred.");
+        }
+    }
+
+    // 백엔드 서버 -> 클라이언트 (페이지 결과)
+    @GetMapping("record")
+    public ResponseEntity<?> getDetectionRecords(
+            @RequestParam(value = "limit", defaultValue = "10") int limit,
+            @RequestParam(value = "cursor", required = false) Long cursor,
+            @SessionAttribute(value = SessionConst.LOGIN_MEMBER, required = false) Member loginMember) {
+
+        // 1. 로그인 세션 확인
+        if (loginMember == null) {
+            ErrorResponse errorResponse = new ErrorResponse(
+                    "UNAUTHORIZED",
+                    "로그인이 필요합니다."
+            );
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(errorResponse);
+        }
+
+        try {
+            // 2. 서비스 호출
+            DetectionListResponse response = detectionService.getDetectionList(loginMember, limit, cursor);
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("Error retrieving detection list for memberId: {}", loginMember.getMemberId(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("An unexpected error occurred.");
+        }
+    }
+
+    // 백엔드 서버 -> 클라이언트 (결과 이미지 경로)
+    @GetMapping("record/{resultId}/report")
+    public ResponseEntity<?> getDetectionReport(@PathVariable("resultId") Long resultId) {
+        try {
+            // 서비스 호출
+            DetectionImgUrlResponse response = detectionService.getDetectionReportResponse(resultId);
+            return ResponseEntity.ok(response);
+
+        } catch (IllegalArgumentException e) {
+            // 3. ID에 해당하는 결과가 없을 경우 404 Not Found
+            log.warn("Record request for non-existent Result ID: {}", resultId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(e.getMessage());
+
+        } catch (Exception e) {
+            // 4. 기타 서버 에러 500
+            log.error("Error retrieving detection record for resultId: {}", resultId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("An unexpected error occurred.");
+        }
+    }
+
+    // 실제 이미지를 반환
+    @GetMapping("detection/report/image/{reportId}")
+    public ResponseEntity<?> getReportImage(@PathVariable("reportId") Long reportId) {
+        try {
+            // 1. 파일 가져오기
+            File file = detectionService.getReportImageFile(reportId);
+            Resource resource = new FileSystemResource(file);
+
+            // 2. MIME 타입 추론
+            String contentType = Files.probeContentType(file.toPath());
+            MediaType mediaType = (contentType != null)
+                    ? MediaType.parseMediaType(contentType)
+                    : MediaType.IMAGE_JPEG; // 기본값
+
+            // 3. 이미지 바이너리 반환
+            return ResponseEntity.ok()
+                    .contentType(mediaType)
+                    .body(resource);
+
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(null); // 이미지 없음
+        } catch (Exception e) {
+            log.error("Error serving image for reportId: {}", reportId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+    @GetMapping("detection/test")
     public ResponseEntity<?> test() {
         detectionService.testDetection();
         return ResponseEntity.ok().build();

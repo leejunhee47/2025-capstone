@@ -43,10 +43,14 @@ public class DetectionRequest {
 //    @Column
 //    private Long fileSize;
 
-    @Column // 원본 영상의 S3 경로
+    @Column // 원본 영상 경로
     private String videoPath;
 
-    @Column // 분석 결과의 S3 경로
+    @Column // 썸네일 경로
+    private String thumbnailPath;
+
+
+    @Column // 분석 결과 경로
     private String resultPath;
 
     // --------
