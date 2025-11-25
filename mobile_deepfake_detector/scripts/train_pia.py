@@ -84,6 +84,11 @@ def train_epoch(
         mask = batch['mask'].to(device)         # (B, P, F)
         labels = batch['label'].to(device)      # (B,)
 
+        # Safety: Replace NaN/Inf with 0 (belt-and-suspenders approach)
+        geoms = torch.nan_to_num(geoms, nan=0.0, posinf=0.0, neginf=0.0)
+        imgs = torch.nan_to_num(imgs, nan=0.0, posinf=0.0, neginf=0.0)
+        arcs = torch.nan_to_num(arcs, nan=0.0, posinf=0.0, neginf=0.0)
+
         # Forward pass
         optimizer.zero_grad()
         logits, _ = model(geoms, imgs, arcs, mask)
@@ -105,8 +110,9 @@ def train_epoch(
         correct += (predicted == labels).sum().item()
         total += labels.size(0)
 
-        # Log progress
-        if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == len(dataloader):
+        # Log progress (adaptive: ~5 times per epoch)
+        log_interval = max(1, len(dataloader) // 5)
+        if (batch_idx + 1) % log_interval == 0 or (batch_idx + 1) == len(dataloader):
             logger.info(
                 f"Epoch {epoch} [{batch_idx + 1}/{len(dataloader)}] "
                 f"Loss: {loss.item():.4f} "
@@ -142,6 +148,11 @@ def validate(
             mask = batch['mask'].to(device)
             labels = batch['label'].to(device)
 
+            # Safety: Replace NaN/Inf with 0 (consistent with training)
+            geoms = torch.nan_to_num(geoms, nan=0.0, posinf=0.0, neginf=0.0)
+            imgs = torch.nan_to_num(imgs, nan=0.0, posinf=0.0, neginf=0.0)
+            arcs = torch.nan_to_num(arcs, nan=0.0, posinf=0.0, neginf=0.0)
+
             # Forward pass
             logits, _ = model(geoms, imgs, arcs, mask)
 
@@ -174,7 +185,7 @@ def main():
                         help='Batch size for training')
     parser.add_argument('--lr', type=float, default=0.0001,
                         help='Learning rate')
-    parser.add_argument('--output-dir', type=str, default='outputs/pia_baseline/',
+    parser.add_argument('--output-dir', type=str, default='F:/preprocessed_data_pia_optimized/',
                         help='Output directory for checkpoints and logs')
     parser.add_argument('--device', type=str, default='cuda',
                         help='Device to use (cuda or cpu)')
@@ -279,10 +290,11 @@ def main():
     logger.info("Starting training")
     logger.info("="*60)
 
-    best_val_acc = 0.0
+    best_val_loss = float('inf')
     patience_counter = 0
     early_stopping_patience = config.get('training', {}).get('early_stopping_patience', 10)
     logger.info(f"Early stopping patience: {early_stopping_patience} epochs")
+    logger.info("Best model selection: Based on lowest validation loss")
 
     for epoch in range(1, args.epochs + 1):
         logger.info(f"\nEpoch {epoch}/{args.epochs}")
@@ -300,8 +312,8 @@ def main():
         scheduler.step(val_loss)
 
         # Save best model and check early stopping
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
             patience_counter = 0  # Reset counter
             best_path = checkpoint_dir / 'best.pth'
             torch.save({
@@ -311,7 +323,7 @@ def main():
                 'val_acc': val_acc,
                 'val_loss': val_loss
             }, best_path)
-            logger.info(f"Saved best model (val_acc={val_acc:.2f}%) to {best_path}")
+            logger.info(f"Saved best model (val_loss={val_loss:.4f}, val_acc={val_acc:.2f}%) to {best_path}")
         else:
             patience_counter += 1
             logger.info(f"No improvement for {patience_counter}/{early_stopping_patience} epochs")
@@ -319,7 +331,7 @@ def main():
             # Early stopping check
             if patience_counter >= early_stopping_patience:
                 logger.info(f"Early stopping triggered after {epoch} epochs")
-                logger.info(f"Best validation accuracy: {best_val_acc:.2f}%")
+                logger.info(f"Best validation loss: {best_val_loss:.4f}")
                 break
 
         # Save last model
@@ -334,7 +346,7 @@ def main():
 
     logger.info("="*60)
     logger.info("Training completed!")
-    logger.info(f"Best validation accuracy: {best_val_acc:.2f}%")
+    logger.info(f"Best validation loss: {best_val_loss:.4f}")
     logger.info("="*60)
 
 

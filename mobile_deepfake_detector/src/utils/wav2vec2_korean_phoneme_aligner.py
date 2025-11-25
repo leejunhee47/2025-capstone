@@ -230,21 +230,28 @@ class Wav2Vec2KoreanPhonemeAligner:
 
             # Step 4: Wav2Vec2 phoneme recognition on speech segments
             self.logger.info("  [4/5] Running Wav2Vec2 phoneme recognition...")
-            phonemes, intervals = self._recognize_phonemes_from_segments(audio, vad_segments)
+            phonemes, intervals, phoneme_confidence = self._recognize_phonemes_from_segments(audio, vad_segments)
 
             if not phonemes:
                 self.logger.warning("No phonemes extracted (Wav2Vec2 returned empty)")
                 return self._empty_result()
 
             self.logger.info(f"    Phonemes extracted: {len(phonemes)}")
+            self.logger.info(f"    Phoneme confidence: {phoneme_confidence:.1%}")
 
             # Step 5: IPA → Jamo conversion
             self.logger.info("  [5/5] Converting IPA to Jamo...")
             jamo_phonemes, jamo_intervals = self._convert_to_jamo(phonemes, intervals)
 
             # Step 6: WhisperX transcription (optional, for segment texts)
-            self.logger.info("  [6/6] Running WhisperX transcription for segment texts...")
-            segment_texts = self._transcribe_segments(audio, vad_segments)
+            # DISABLED for faster processing - transcription not needed for MAR collection
+            # self.logger.info("  [6/6] Running WhisperX transcription for segment texts...")
+            # segment_texts = self._transcribe_segments(audio, vad_segments)
+            segment_texts = []  # Empty list to skip transcription
+
+            # Calculate VAD coverage and hybrid accuracy
+            speech_coverage = total_speech_duration / duration if duration > 0 else 0.0
+            accuracy = 0.7 * phoneme_confidence + 0.3 * speech_coverage
 
             # Cleanup
             if audio_path.exists():
@@ -259,11 +266,17 @@ class Wav2Vec2KoreanPhonemeAligner:
                 'duration': duration,
                 'vad_segments': vad_segments,
                 'segment_texts': segment_texts,  # NEW: Text for each segment
+                'phoneme_confidence': phoneme_confidence,  # CTC confidence
+                'speech_coverage': speech_coverage,        # VAD coverage
+                'accuracy': accuracy,                      # Hybrid accuracy
                 'method': 'wav2vec2_slplab'
             }
 
             self.logger.info(f"✓ Processing complete:")
             self.logger.info(f"    Jamo phonemes: {len(jamo_phonemes)}")
+            self.logger.info(f"    Phoneme confidence: {phoneme_confidence:.1%}")
+            self.logger.info(f"    Speech coverage: {speech_coverage:.1%}")
+            self.logger.info(f"    Overall accuracy: {accuracy:.1%}")
             self.logger.info(f"    Coverage: {jamo_intervals[-1][1] if jamo_intervals else 0:.2f}s / {duration:.2f}s")
             self.logger.info(f"    Time saved: {duration - total_speech_duration:.2f}s "
                            f"({100 * (duration - total_speech_duration) / duration:.1f}% skipped)")
@@ -385,7 +398,7 @@ class Wav2Vec2KoreanPhonemeAligner:
         self,
         audio: np.ndarray,
         vad_segments: List[Tuple[float, float]]
-    ) -> Tuple[List[str], List[Tuple[float, float]]]:
+    ) -> Tuple[List[str], List[Tuple[float, float]], float]:
         """
         Run Wav2Vec2 phoneme recognition on VAD segments
 
@@ -394,10 +407,11 @@ class Wav2Vec2KoreanPhonemeAligner:
             vad_segments: List of (start, end) speech segments
 
         Returns:
-            tuple: (phonemes, intervals) with global timestamps
+            tuple: (phonemes, intervals, avg_confidence) with global timestamps
         """
         all_phonemes = []
         all_intervals = []
+        confidence_scores = []  # Collect confidence from each segment
 
         for seg_idx, (seg_start, seg_end) in enumerate(vad_segments):
             # Extract audio segment
@@ -405,8 +419,8 @@ class Wav2Vec2KoreanPhonemeAligner:
             end_sample = int(seg_end * 16000)
             segment_audio = audio[start_sample:end_sample]
 
-            # Run Wav2Vec2 CTC recognition
-            segment_phonemes, segment_intervals = self._recognize_segment_phonemes(segment_audio)
+            # Run Wav2Vec2 CTC recognition (now returns confidence)
+            segment_phonemes, segment_intervals, segment_confidence = self._recognize_segment_phonemes(segment_audio)
 
             if not segment_phonemes:
                 self.logger.warning(f"Segment {seg_idx+1}/{len(vad_segments)} "
@@ -421,17 +435,21 @@ class Wav2Vec2KoreanPhonemeAligner:
 
             all_phonemes.extend(segment_phonemes)
             all_intervals.extend(adjusted_intervals)
+            confidence_scores.append(segment_confidence)
 
             self.logger.debug(f"Segment {seg_idx+1}/{len(vad_segments)} "
                             f"[{seg_start:.2f}-{seg_end:.2f}s]: "
-                            f"{len(segment_phonemes)} phonemes")
+                            f"{len(segment_phonemes)} phonemes, conf={segment_confidence:.2%}")
 
-        return all_phonemes, all_intervals
+        # Calculate average confidence across all segments
+        avg_confidence = float(np.mean(confidence_scores)) if confidence_scores else 0.0
+
+        return all_phonemes, all_intervals, avg_confidence
 
     def _recognize_segment_phonemes(
         self,
         audio_segment: np.ndarray
-    ) -> Tuple[List[str], List[Tuple[float, float]]]:
+    ) -> Tuple[List[str], List[Tuple[float, float]], float]:
         """
         Recognize phonemes in a single audio segment using Wav2Vec2 CTC
 
@@ -439,7 +457,7 @@ class Wav2Vec2KoreanPhonemeAligner:
             audio_segment: Audio array for one segment (16kHz, mono)
 
         Returns:
-            tuple: (ipa_phonemes, intervals)
+            tuple: (ipa_phonemes, intervals, confidence_score)
         """
         # Preprocess audio
         inputs = self.processor(
@@ -456,8 +474,14 @@ class Wav2Vec2KoreanPhonemeAligner:
         with torch.no_grad():
             logits = self.model(input_values).logits
 
+        # Calculate CTC confidence score
+        probs = torch.nn.functional.softmax(logits, dim=-1)  # (1, T, vocab_size)
+        max_probs, predicted_ids = torch.max(probs, dim=-1)   # (1, T)
+
+        # Average confidence across all frames
+        confidence_score = float(max_probs[0].mean())
+
         # CTC decoding
-        predicted_ids = torch.argmax(logits, dim=-1)
         predicted_tokens = self.processor.batch_decode(predicted_ids)[0]
 
         # Extract phoneme sequence with timestamps from CTC alignment
@@ -467,7 +491,7 @@ class Wav2Vec2KoreanPhonemeAligner:
             len(audio_segment) / 16000.0
         )
 
-        return phonemes, intervals
+        return phonemes, intervals, confidence_score
 
     def _extract_ctc_alignments(
         self,

@@ -10,7 +10,115 @@ from typing import Dict, List, Tuple, Optional
 import json
 import logging
 
-from src.data.preprocessing import ShortsPreprocessor
+from .preprocessing import ShortsPreprocessor
+
+
+class MMSBDataset(Dataset):
+    """
+    MMMS-BA 학습용 Dataset (preprocessed_mmms-ba/ 폴더 구조)
+
+    구조:
+    preprocessed_mmms-ba/
+    ├── train_index.json
+    ├── val_index.json
+    ├── test_index.json
+    ├── real/
+    │   └── *.npz
+    └── fake/
+        └── *.npz
+    """
+
+    def __init__(
+        self,
+        data_root: str,
+        split: str = "train",
+        config: Optional[Dict] = None,
+        augmentation = None
+    ):
+        """
+        Initialize MMMS-BA dataset
+
+        Args:
+            data_root: preprocessed_mmms-ba/ 경로
+            split: 'train', 'val', 'test'
+            config: Configuration dictionary
+            augmentation: Augmentation function (train split only)
+        """
+        self.data_root = Path(data_root)
+        self.split = split
+        self.config = config or {}
+        self.augmentation = augmentation if split == "train" else None
+
+        self.logger = logging.getLogger(__name__)
+
+        # Index JSON 로드
+        index_file = self.data_root / f"{split}_index.json"
+
+        if not index_file.exists():
+            raise FileNotFoundError(
+                f"Index file not found: {index_file}\n"
+                f"Run create_mmms_ba_splits.py first!"
+            )
+
+        with open(index_file, 'r', encoding='utf-8') as f:
+            self.samples = json.load(f)
+
+        self.logger.info(f"Loaded {len(self.samples)} samples for {split} split")
+        self.logger.info(f"Data root: {self.data_root}")
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        """
+        NPZ 파일에서 데이터 로드
+
+        Args:
+            idx: 샘플 인덱스
+
+        Returns:
+            item: Dictionary with tensors
+        """
+        sample = self.samples[idx]
+
+        # NPZ 파일 경로 (real/00000.npz 또는 fake/00000.npz)
+        npz_path = self.data_root / sample['npz_path']
+
+        # NPZ 파일 로드
+        try:
+            data = np.load(npz_path)
+
+            # Frames: (N, H, W, 3) -> (N, 3, H, W)
+            frames = torch.from_numpy(data['frames']).float()
+            frames = frames.permute(0, 3, 1, 2)  # (N, 3, H, W)
+
+            # Audio: (T, n_mfcc)
+            audio = torch.from_numpy(data['audio']).float()
+
+            # Lip: (N, lip_H, lip_W, 3) -> (N, 3, lip_H, lip_W)
+            lip = torch.from_numpy(data['lip']).float()
+            lip = lip.permute(0, 3, 1, 2)  # (N, 3, lip_H, lip_W)
+
+            # Label (0: REAL, 1: FAKE)
+            label = torch.tensor(sample['label'], dtype=torch.long)
+
+            item = {
+                'frames': frames,
+                'audio': audio,
+                'lip': lip,
+                'label': label,
+                'video_id': sample['video_id']
+            }
+
+            # Augmentation (train only)
+            if self.augmentation is not None:
+                item = self.augmentation(item)
+
+            return item
+
+        except Exception as e:
+            self.logger.error(f"Error loading {npz_path}: {e}")
+            raise
 
 
 class PreprocessedDeepfakeDataset(Dataset):
@@ -385,7 +493,7 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     # Initialize tensors
     frames_batch = torch.zeros(batch_size, max_frames, 3, 224, 224)
     audio_batch = torch.zeros(batch_size, max_audio, 40)  # n_mfcc=40
-    lip_batch = torch.zeros(batch_size, max_frames, 3, 96, 96)
+    lip_batch = torch.zeros(batch_size, max_frames, 3, 112, 112)
     labels_batch = torch.zeros(batch_size, dtype=torch.long)
 
     # Masks

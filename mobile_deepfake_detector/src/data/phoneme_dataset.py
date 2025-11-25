@@ -320,6 +320,36 @@ class KoreanPhonemeDataset(Dataset):
         if len(npz_files) == 0:
             raise ValueError(f"No .npz files found in {split_dir}")
 
+        # Filter out samples with no valid phonemes (mask_sum = 0)
+        # These samples cause NaN in model forward pass
+        valid_files = []
+        filtered_count = 0
+
+        for npz_path in npz_files:
+            data = np.load(npz_path, allow_pickle=True)
+            phoneme_labels = data['phoneme_labels']
+
+            # Check if any frame has a kept phoneme
+            has_valid_phoneme = any(
+                is_kept_phoneme(str(p).strip()) for p in phoneme_labels
+            )
+
+            if has_valid_phoneme:
+                valid_files.append(npz_path)
+            else:
+                filtered_count += 1
+
+        if filtered_count > 0:
+            self.logger.warning(
+                f"Filtered {filtered_count}/{len(npz_files)} samples with no valid phonemes "
+                f"({100.0 * filtered_count / len(npz_files):.1f}%)"
+            )
+
+        npz_files = valid_files
+
+        if len(npz_files) == 0:
+            raise ValueError(f"No valid samples after filtering in {split_dir}")
+
         # Apply YouTube compression augmentation (both Real and Fake)
         if self.augment_real:
             # Select samples for augmentation (both Real and Fake)
@@ -520,15 +550,15 @@ class KoreanPhonemeDataset(Dataset):
                 geoms[pi, fi] = torch.tensor(frame_data['geometry'], dtype=torch.float32)
 
                 # Lip crop image
-                lip_crop = frame_data['lip']  # (H, W, 3) in [0, 255]
+                lip_crop = frame_data['lip']  # (H, W, 3) - already normalized to [0, 1] in NPZ
 
                 # Resize if needed
                 if lip_crop.shape[0] != self.H or lip_crop.shape[1] != self.W:
                     import cv2
                     lip_crop = cv2.resize(lip_crop, (self.W, self.H))
 
-                # Convert to tensor and normalize
-                lip_tensor = torch.tensor(lip_crop, dtype=torch.float32) / 255.0  # [0, 1]
+                # Convert to tensor (already normalized in preprocessing)
+                lip_tensor = torch.tensor(lip_crop, dtype=torch.float32)  # [0, 1]
                 lip_tensor = lip_tensor.permute(2, 0, 1)  # (3, H, W)
 
                 # Apply optional transform
@@ -542,6 +572,32 @@ class KoreanPhonemeDataset(Dataset):
 
                 # Mark as valid
                 mask[pi, fi] = True
+
+        # Post-process: Handle NaN in geometry with phoneme-wise interpolation
+        # For each phoneme, replace NaN with the mean of valid frames in that phoneme
+        for pi in range(self.P):
+            phoneme_geoms = geoms[pi]  # (F, geo_dim)
+            phoneme_mask = mask[pi]    # (F,)
+
+            # Process each geometry dimension separately
+            for gi in range(self.geo_dim):
+                geo_values = phoneme_geoms[:, gi]  # (F,)
+
+                # Find valid (non-NaN) values within this phoneme
+                valid_mask = ~torch.isnan(geo_values) & phoneme_mask
+
+                if valid_mask.any():
+                    # Compute mean of valid frames for this phoneme
+                    phoneme_mean = geo_values[valid_mask].mean()
+
+                    # Replace NaN with phoneme-specific mean
+                    nan_mask = torch.isnan(geo_values)
+                    if nan_mask.any():
+                        geo_values[nan_mask] = phoneme_mean
+                        geoms[pi, :, gi] = geo_values
+                else:
+                    # Entire phoneme has NaN → fill with 0 (will be masked out)
+                    geoms[pi, :, gi] = 0.0
 
         return geoms, imgs, arcs, mask
 

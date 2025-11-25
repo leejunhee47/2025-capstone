@@ -61,6 +61,52 @@ except ImportError as e:
     ) from e
 
 
+# ============================================================================
+# Korean Vowel Duration Weights (Heuristic-based)
+# ============================================================================
+# These durations are based on Korean phonetics research and general patterns.
+# Used for weighted timestamp interpolation when precise alignment is unavailable.
+KOREAN_VOWEL_DURATIONS = {
+    # 단모음 (Monophthongs): 90-120ms
+    'ㅏ': 110,  # /a/ - most open vowel
+    'ㅓ': 105,  # /ʌ/
+    'ㅗ': 115,  # /o/
+    'ㅜ': 110,  # /u/
+    'ㅡ': 95,   # /ɨ/ - tense vowel, slightly shorter
+    'ㅣ': 90,   # /i/ - tense vowel, shortest
+    'ㅐ': 105,  # /ɛ/
+    'ㅔ': 100,  # /e/
+    'ㅚ': 120,  # /ø/ - rounded, slightly longer
+    'ㅟ': 115,  # /y/ - rounded
+
+    # 이중모음 (Diphthongs): 120-150ms (1.2-1.4x longer than monophthongs)
+    'ㅑ': 130,  # /ja/
+    'ㅕ': 125,  # /jʌ/
+    'ㅛ': 135,  # /jo/
+    'ㅠ': 130,  # /ju/
+    'ㅒ': 125,  # /jɛ/
+    'ㅖ': 120,  # /je/
+    'ㅘ': 140,  # /wa/ - compound diphthong, longest
+    'ㅙ': 135,  # /wɛ/
+    'ㅝ': 135,  # /wʌ/
+    'ㅞ': 130,  # /we/
+    'ㅢ': 125,  # /ɨi/
+}
+
+
+def is_korean_vowel(jamo: str) -> bool:
+    """
+    Check if a jamo character is a vowel
+
+    Args:
+        jamo: Single jamo character
+
+    Returns:
+        bool: True if vowel, False otherwise
+    """
+    return jamo in KOREAN_VOWEL_DURATIONS
+
+
 class WhisperXPhonemeAligner:
     """
     WhisperX-based Korean phoneme aligner with g2pk pronunciation conversion
@@ -276,6 +322,65 @@ class WhisperXPhonemeAligner:
 
         return audio_path
 
+    def _distribute_vowel_timestamps(self, word_start: float, word_end: float, jamos: List[str]) -> Tuple[List[str], List[Tuple]]:
+        """
+        Extract only vowels from jamos and distribute timestamps using duration weights
+
+        This method improves over uniform distribution by:
+        1. Filtering only vowels (consonants don't affect MAR measurements)
+        2. Using phonetic duration weights (diphthongs longer than monophthongs)
+        3. Proportional time allocation based on expected durations
+
+        Args:
+            word_start: Word start time in seconds
+            word_end: Word end time in seconds
+            jamos: List of all jamo characters from the word
+
+        Returns:
+            tuple: (vowel_phonemes, vowel_intervals)
+                - vowel_phonemes: List of vowel jamos only
+                - vowel_intervals: List of (start, end) tuples for each vowel
+
+        Example:
+            word "학교" (0.5 ~ 1.0s):
+            jamos = ['ㅎ', 'ㅏ', 'ㄱ', 'ㄱ', 'ㅛ']
+
+            Vowels: ['ㅏ', 'ㅛ']
+            Weights: [110ms, 135ms]
+            Ratios: [0.449, 0.551]
+
+            Output:
+            (['ㅏ', 'ㅛ'], [(0.5, 0.7245), (0.7245, 1.0)])
+        """
+        # 1. Filter only vowels
+        vowels = [j for j in jamos if is_korean_vowel(j)]
+
+        if not vowels:
+            # No vowels in this word (rare, but handle gracefully)
+            return [], []
+
+        # 2. Get expected durations for each vowel
+        expected_durations = [KOREAN_VOWEL_DURATIONS[v] for v in vowels]
+        total_expected = sum(expected_durations)
+
+        # 3. Calculate actual word duration
+        word_duration = word_end - word_start
+
+        # 4. Distribute time proportionally based on weights
+        vowel_intervals = []
+        current_time = word_start
+
+        for vowel, expected_dur in zip(vowels, expected_durations):
+            # Calculate weight ratio
+            ratio = expected_dur / total_expected
+            actual_dur = word_duration * ratio
+
+            # Create interval
+            vowel_intervals.append((round(current_time, 3), round(current_time + actual_dur, 3)))
+            current_time += actual_dur
+
+        return vowels, vowel_intervals
+
     def _extract_phonemes_g2pk(self, aligned_result: Dict) -> Tuple[List[str], List[Tuple], List[Tuple]]:
         """
         Extract phonemes from WhisperX character-level alignment with Jamo decomposition
@@ -355,37 +460,35 @@ class WhisperXPhonemeAligner:
                                     phonemes.append(syllable)
                                     intervals.append((round(char_start, 3), round(char_end, 3)))
                 else:
-                    # Fallback: char alignment 없으면 균등 분배
-                    self.logger.warning(f"No character alignment for word '{word_text}', using fallback")
+                    # Fallback: char alignment 없으면 가중치 기반 모음 분배
+                    self.logger.warning(f"No character alignment for word '{word_text}', using weighted vowel distribution")
 
                     try:
                         phoneme_str = self.g2p(word_text)
                     except Exception as e:
                         phoneme_str = word_text
 
-                    # 자모 분해
-                    word_phonemes = []
+                    # 자모 분해 (전체 자모 추출)
+                    word_jamos = []
                     for syllable in phoneme_str:
                         if syllable.strip():
                             if 0xAC00 <= ord(syllable) <= 0xD7A3:
                                 try:
                                     jamo_chars = j2hcj(h2j(syllable))
-                                    word_phonemes.extend(list(jamo_chars))
+                                    word_jamos.extend(list(jamo_chars))
                                 except:
-                                    word_phonemes.append(syllable)
+                                    word_jamos.append(syllable)
                             else:
-                                word_phonemes.append(syllable)
+                                word_jamos.append(syllable)
 
-                    # 균등 분배
-                    word_duration = word_end - word_start
-                    phoneme_duration = word_duration / len(word_phonemes) if word_phonemes else 0
+                    # 모음만 추출 + 가중치 기반 타임스탬프 분배
+                    vowels, vowel_intervals = self._distribute_vowel_timestamps(
+                        word_start, word_end, word_jamos
+                    )
 
-                    for i, phoneme in enumerate(word_phonemes):
-                        if phoneme.strip():
-                            phoneme_start = word_start + i * phoneme_duration
-                            phoneme_end = word_start + (i + 1) * phoneme_duration
-                            phonemes.append(phoneme)
-                            intervals.append((round(phoneme_start, 3), round(phoneme_end, 3)))
+                    # 모음만 phonemes/intervals에 추가
+                    phonemes.extend(vowels)
+                    intervals.extend(vowel_intervals)
 
         return phonemes, intervals, words
 

@@ -2,6 +2,7 @@
 Attention mechanisms for multimodal fusion
 """
 
+from typing import Union, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -33,8 +34,9 @@ class BiModalAttention(nn.Module):
         x: torch.Tensor,
         y: torch.Tensor,
         x_mask: torch.Tensor = None,
-        y_mask: torch.Tensor = None
-    ) -> torch.Tensor:
+        y_mask: torch.Tensor = None,
+        return_attention: bool = False
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]]:
         """
         Forward pass
 
@@ -43,9 +45,16 @@ class BiModalAttention(nn.Module):
             y: Second modality (B, T_y, D)
             x_mask: Mask for x (B, T_x)
             y_mask: Mask for y (B, T_y)
+            return_attention: If True, also return attention weights (default: False)
 
         Returns:
-            attended: Concatenated attended features (B, T_x, 2*D)
+            If return_attention=False:
+                attended: Concatenated attended features (B, T_x, 2*D)
+            If return_attention=True:
+                attended: Concatenated attended features (B, T_x, 2*D)
+                (attn_xy, attn_yx): Tuple of attention weight tensors
+                    attn_xy: (B, T_x, T_y) - X -> Y attention
+                    attn_yx: (B, T_y, T_x) - Y -> X attention
         """
         # X -> Y attention
         # scores: (B, T_x, T_y)
@@ -87,7 +96,10 @@ class BiModalAttention(nn.Module):
         # attended: (B, T_x, 2*D)
         attended = torch.cat([output_x, output_y_to_x], dim=-1)
 
-        return attended
+        if return_attention:
+            return attended, (attn_xy, attn_yx)
+        else:
+            return attended
 
 
 class SelfAttention(nn.Module):

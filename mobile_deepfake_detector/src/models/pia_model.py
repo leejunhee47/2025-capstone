@@ -182,7 +182,7 @@ class PIAModel(nn.Module):
 
         # ===== Visual Features =====
         # Process P phonemes independently
-        x = imgs.view(B * P, C, F, H, W)   # (B*P, 3, F, H, W)
+        x = imgs.reshape(B * P, C, F, H, W)   # (B*P, 3, F, H, W) - reshape handles non-contiguous tensors
 
         # 3D CNN temporal modeling
         x = self.cnn3d(x)                  # (B*P, 3, F, H, W)

@@ -17,7 +17,7 @@ import logging
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.models.teacher import MMMSBA
-from src.data.dataset import DeepfakeDataset, PreprocessedDeepfakeDataset, create_dataloader
+from src.data.dataset import DeepfakeDataset, PreprocessedDeepfakeDataset, MMSBDataset, create_dataloader
 from src.data.augmentation import MultiModalAugmentation
 from src.utils.config import load_config
 from src.utils.logger import setup_logger
@@ -72,7 +72,7 @@ class Trainer:
         # Mixed precision training
         self.use_amp = config['training'].get('mixed_precision', False) and torch.cuda.is_available()
         if self.use_amp:
-            self.scaler = torch.cuda.amp.GradScaler()
+            self.scaler = torch.amp.GradScaler('cuda')
             self.logger.info("Mixed precision training (AMP) enabled")
 
         # Build model
@@ -106,6 +106,10 @@ class Trainer:
         self.best_val_recall = 0.0
         self.best_val_f1 = 0.0
         self.current_epoch = 0
+
+        # Checkpoint monitoring config
+        self.checkpoint_monitor = config['training']['checkpoint'].get('monitor', 'val_acc')
+        self.checkpoint_mode = config['training']['checkpoint'].get('mode', 'max')
 
         # TensorBoard
         self.writer = SummaryWriter(
@@ -213,7 +217,7 @@ class Trainer:
 
             # Mixed precision training
             if self.use_amp:
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     logits = self.model(
                         audio=audio,
                         frames=frames,
@@ -307,7 +311,7 @@ class Trainer:
 
             # Forward pass (with AMP if enabled)
             if self.use_amp:
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     logits = self.model(
                         audio=audio,
                         frames=frames,
@@ -372,7 +376,11 @@ class Trainer:
         # Save best checkpoint
         if is_best and self.config['training']['checkpoint']['save_best']:
             torch.save(checkpoint, checkpoint_dir / f'{prefix}best.pth')
-            self.logger.info(f"Saved best checkpoint (val_acc: {self.best_val_acc:.4f})")
+            monitor_name = self.config['training']['checkpoint'].get('monitor', 'val_acc')
+            if monitor_name == 'val_loss':
+                self.logger.info(f"Saved best checkpoint ({monitor_name}: {self.best_val_loss:.4f})")
+            else:
+                self.logger.info(f"Saved best checkpoint ({monitor_name}: {self.best_val_acc:.4f})")
 
     def train(self, train_loader, val_loader):
         """
@@ -419,10 +427,25 @@ class Trainer:
                 self.writer.add_scalar('epoch/val_acc', val_metrics['accuracy'], epoch)
                 self.writer.add_scalar('epoch/val_f1', val_metrics['f1_score'], epoch)
 
-                # Check if best (based on validation accuracy)
-                is_best = val_metrics['accuracy'] > self.best_val_acc
+                # Check if best (based on config monitor)
+                monitor_metric = self.checkpoint_monitor.replace('val_', '')  # 'val_loss' → 'loss'
+                current_value = val_metrics[monitor_metric]
+
+                if self.checkpoint_mode == 'min':
+                    # Lower is better (e.g., val_loss)
+                    if monitor_metric == 'loss':
+                        is_best = current_value < self.best_val_loss
+                    else:
+                        is_best = False  # Fallback
+                else:
+                    # Higher is better (e.g., val_acc)
+                    if monitor_metric == 'accuracy':
+                        is_best = current_value > self.best_val_acc
+                    else:
+                        is_best = False  # Fallback
+
                 if is_best:
-                    # Update all best metrics when val_acc improves
+                    # Update all best metrics
                     self.best_val_acc = val_metrics['accuracy']
                     self.best_val_loss = val_metrics['loss']
                     self.best_val_precision = val_metrics['precision']
@@ -771,14 +794,14 @@ def main():
         )
         logger.info("[OK] Data augmentation enabled for training")
 
-    train_dataset = PreprocessedDeepfakeDataset(
+    train_dataset = MMSBDataset(
         data_root=config['dataset']['root_dir'],
         split='train',
         config=config['dataset'],
         augmentation=train_augmentation
     )
 
-    val_dataset = PreprocessedDeepfakeDataset(
+    val_dataset = MMSBDataset(
         data_root=config['dataset']['root_dir'],
         split='val',
         config=config['dataset'],

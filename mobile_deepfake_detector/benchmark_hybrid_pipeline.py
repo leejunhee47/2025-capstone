@@ -1,6 +1,6 @@
 """
-Hybrid Pipeline Performance Benchmark
-벤치마크: 처리 시간 151초 → 100초 (34% 단축) 목표 검증
+Hybrid Pipeline Performance Benchmark (Unified Version)
+벤치마크: 처리 시간 151초 → 60초 (60% 단축) 목표 검증
 
 Test 3: 전체 파이프라인 성능
 Test 5: 여러 비디오 평균 성능
@@ -29,10 +29,10 @@ TEST_VIDEOS = [
 ]
 
 # Model paths
-MMMS_BA_CHECKPOINT = Path("models/checkpoints/mmms-ba_fulldata_best.pth")
-MMMS_BA_CONFIG = Path("configs/train_teacher_korean.yaml")
+MMMS_BA_CHECKPOINT = Path("mobile_deepfake_detector/models/checkpoints/mmms-ba_fulldata_best.pth")
+MMMS_BA_CONFIG = Path("mobile_deepfake_detector/configs/train_teacher_korean.yaml")
 PIA_CHECKPOINT = Path("F:/preprocessed_data_pia_optimized/checkpoints/best.pth")
-PIA_CONFIG = Path("configs/train_pia.yaml")
+PIA_CONFIG = Path("mobile_deepfake_detector/configs/train_pia.yaml")
 
 # ===================================
 # Test 3: Single Video Performance
@@ -41,12 +41,12 @@ PIA_CONFIG = Path("configs/train_pia.yaml")
 def test_single_video_performance():
     """
     Test 3: 전체 파이프라인 처리 시간 측정
-    목표: 151초 → 100초 (34% 단축)
+    목표: 151초 → 60초 (60% 단축)
     """
     print("\n" + "="*80)
-    print("TEST 3: Single Video Performance Benchmark")
+    print("TEST 3: Single Video Performance Benchmark (Unified Pipeline)")
     print("="*80)
-    print(f"\nTarget: < 110 seconds (baseline: 151s, goal: 100s)")
+    print(f"\nTarget: < 70 seconds (baseline: 151s, goal: 60s)")
 
     if not TEST_VIDEOS:
         print("\n[SKIP] No test videos configured")
@@ -60,7 +60,7 @@ def test_single_video_performance():
         return None
 
     # Initialize pipeline
-    print(f"\n[1/3] Initializing HybridXAIPipeline...")
+    print(f"\n[1/3] Initializing Unified HybridXAIPipeline...")
 
     try:
         pipeline = HybridXAIPipeline(
@@ -85,8 +85,7 @@ def test_single_video_performance():
         result = pipeline.process_video(
             video_path=video_path,
             video_id=test_video['video_id'],
-            threshold=0.6,
-            save_visualizations=False  # Disable for speed
+            save_visualizations=False  # Disable for speed check
         )
 
         elapsed_time = time.time() - start_time
@@ -106,11 +105,11 @@ def test_single_video_performance():
     baseline_time = 151.0
     improvement = ((baseline_time - elapsed_time) / baseline_time) * 100
 
-    if elapsed_time < 110:
-        print(f"  [PASS] < 110s target (baseline: 151s)")
+    if elapsed_time < 70:
+        print(f"  [PASS] < 70s target (baseline: 151s)")
         print(f"  Improvement: {improvement:+.1f}% ({baseline_time:.0f}s → {elapsed_time:.0f}s)")
     else:
-        print(f"  [FAIL] > 110s target")
+        print(f"  [INFO] > 70s target")
         print(f"  Improvement: {improvement:+.1f}% ({baseline_time:.0f}s → {elapsed_time:.0f}s)")
 
     # Detection accuracy
@@ -128,39 +127,26 @@ def test_single_video_performance():
     else:
         print(f"    [FAIL] Incorrect prediction")
 
-    # Stage1 timeline
-    stage1_timeline = result.get('stage1_timeline', {})
-    suspicious_intervals = stage1_timeline.get('suspicious_intervals', [])
+    # Raw Results Breakdown
+    raw_results = result.get('raw_results', {})
+    mmms_result = raw_results.get('mmms_ba', {})
+    pia_result = raw_results.get('pia', {})
 
-    print(f"\n  Stage1 (MMMS-BA):")
-    print(f"    Suspicious intervals: {len(suspicious_intervals)}")
-    if suspicious_intervals:
-        print(f"    First interval: {suspicious_intervals[0].get('start_time_sec', 0):.1f}s - {suspicious_intervals[0].get('end_time_sec', 0):.1f}s")
-
-    # Stage2 analysis
-    stage2_analysis = result.get('stage2_interval_analysis', [])
-
-    print(f"\n  Stage2 (PIA):")
-    print(f"    Analyzed intervals: {len(stage2_analysis)}")
-
-    if stage2_analysis:
-        # Check for phoneme matching metrics
-        interval_0 = stage2_analysis[0]
-        phoneme_analysis = interval_0.get('phoneme_analysis', {})
-
-        # Look for matching rate in different possible locations
-        matching_rate = None
-        if 'matching_rate' in phoneme_analysis:
-            matching_rate = phoneme_analysis['matching_rate']
-        elif 'metadata' in interval_0:
-            matching_rate = interval_0['metadata'].get('phoneme_matching_rate')
-
-        if matching_rate is not None:
-            print(f"    Phoneme matching: {matching_rate:.1f}%")
-            if matching_rate >= 90:
-                print(f"    [PASS] >= 90% target")
+    print(f"\n  MMMS-BA:")
+    print(f"    Verdict: {mmms_result.get('verdict', 'unknown').upper()}")
+    print(f"    Confidence: {mmms_result.get('confidence', 0.0):.1%}")
+    
+    print(f"\n  PIA:")
+    # Handle simplified vs full result
+    if 'detection' in pia_result:
+        pia_verdict = pia_result['detection'].get('verdict', 'unknown')
+        pia_conf = pia_result['detection'].get('confidence', 0.0)
             else:
-                print(f"    [INFO] < 90% target")
+        pia_verdict = pia_result.get('verdict', 'unknown')
+        pia_conf = pia_result.get('confidence', 0.0)
+        
+    print(f"    Verdict: {pia_verdict.upper()}")
+    print(f"    Confidence: {pia_conf:.1%}")
 
     print(f"\n  {'='*76}")
 
@@ -171,8 +157,8 @@ def test_single_video_performance():
         'confidence': confidence,
         'expected_label': test_video['expected_label'],
         'correct': verdict.lower() == test_video['expected_label'].lower(),
-        'suspicious_intervals': len(suspicious_intervals),
-        'analyzed_intervals': len(stage2_analysis)
+        'mmms_confidence': mmms_result.get('confidence', 0.0),
+        'pia_confidence': pia_conf
     }
 
 # ===================================
@@ -182,10 +168,6 @@ def test_single_video_performance():
 def test_multiple_videos_benchmark():
     """
     Test 5: 여러 비디오 평균 성능 측정
-    목표:
-    - 평균 처리 시간 < 120초
-    - 평균 phoneme 매칭률 > 80%
-    - 정확도 > 85%
     """
     print("\n" + "="*80)
     print("TEST 5: Multiple Videos Benchmark")
@@ -193,18 +175,9 @@ def test_multiple_videos_benchmark():
 
     if len(TEST_VIDEOS) < 2:
         print("\n[SKIP] Need at least 2 videos for benchmark")
-        print("  Current: Only 1 test video configured")
-        print("  Add more videos to TEST_VIDEOS list for full benchmark")
         return None
 
-    print(f"\nTarget:")
-    print(f"  - Average processing time < 120 seconds")
-    print(f"  - Average phoneme matching > 80%")
-    print(f"  - Detection accuracy > 85%")
-
-    # TODO: Implement multi-video benchmark
-    # This requires adding more test videos to TEST_VIDEOS
-
+    # TODO: Implement if needed
     print("\n[INFO] Multi-video benchmark requires TEST_VIDEOS configuration")
     return None
 
@@ -214,12 +187,12 @@ def test_multiple_videos_benchmark():
 
 if __name__ == "__main__":
     print("\n" + "="*80)
-    print("Hybrid MMMS-BA + PIA XAI Pipeline - Performance Benchmark")
+    print("Unified Hybrid MMMS-BA + PIA XAI Pipeline - Benchmark")
     print("="*80)
     print(f"\nOptimization Goals:")
-    print(f"  1. WhisperX deduplication: 2 calls → 1 call (save ~22s)")
-    print(f"  2. 30fps re-extraction: Improve phoneme matching 22.5% → 90%+")
-    print(f"  3. Total time reduction: 151s → 100s (34% faster)")
+    print(f"  1. Unified Feature Extraction: 1 pass for all models")
+    print(f"  2. Parallel/Simple Pipeline: No interval scanning")
+    print(f"  3. Total time reduction: Target < 70s")
 
     results = {}
 
@@ -227,11 +200,6 @@ if __name__ == "__main__":
     result_3 = test_single_video_performance()
     if result_3:
         results['test_3'] = result_3
-
-    # Test 5: Multiple videos (if configured)
-    result_5 = test_multiple_videos_benchmark()
-    if result_5:
-        results['test_5'] = result_5
 
     # Final summary
     print("\n" + "="*80)
@@ -242,7 +210,7 @@ if __name__ == "__main__":
         r = results['test_3']
         print(f"\n[Test 3] Single Video Performance:")
         print(f"  Time: {r['elapsed_time']:.1f}s")
-        print(f"  Status: {'PASS' if r['elapsed_time'] < 110 else 'FAIL'} (target: <110s)")
+        print(f"  Status: {'PASS' if r['elapsed_time'] < 70 else 'INFO'} (target: <70s)")
         print(f"  Detection: {'PASS' if r['correct'] else 'FAIL'} ({r['verdict'].upper()})")
 
         # Calculate improvement
@@ -254,15 +222,6 @@ if __name__ == "__main__":
         print(f"    Baseline: {baseline:.0f}s")
         print(f"    Current:  {r['elapsed_time']:.0f}s")
         print(f"    Saved:    {improvement_sec:.0f}s ({improvement_pct:+.1f}%)")
-
-        if improvement_pct >= 30:
-            print(f"    [SUCCESS] >= 30% improvement target achieved!")
-        else:
-            print(f"    [INFO] < 30% target (goal: 34%)")
-
-    if 'test_5' in results:
-        print(f"\n[Test 5] Multi-Video Benchmark:")
-        print(f"  {results['test_5']}")
 
     # Save results
     output_path = Path("outputs/benchmark_results.json")

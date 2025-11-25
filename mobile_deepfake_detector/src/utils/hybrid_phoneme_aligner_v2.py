@@ -68,7 +68,7 @@ class HybridPhonemeAligner:
 
     def __init__(
         self,
-        whisper_model: str = "large-v3",
+        whisper_model: str = "large-v2",
         device: str = "cuda",
         compute_type: str = "float16"
     ):
@@ -410,17 +410,48 @@ class HybridPhonemeAligner:
 
             self.logger.info(f"Total: {len(all_phonemes)} phonemes aligned (before filtering)")
 
-            # 단계 3: 14개 핵심 음소로 필터링
-            filtered_phonemes = []
-            filtered_intervals = []
+            # 단계 3: Hybrid 14개 음소 선택 (고정 + 동적)
+            # Step 3.1: Try KEEP_PHONEMES_KOREAN first
+            kept_from_whitelist = [p for p in all_phonemes if is_kept_phoneme(p)]
+            unique_kept = set(kept_from_whitelist)
 
-            for phoneme, interval in zip(all_phonemes, all_intervals):
-                if is_kept_phoneme(phoneme):
-                    filtered_phonemes.append(phoneme)
-                    filtered_intervals.append(interval)
+            self.logger.info(f"Step 3.1: {len(unique_kept)} unique phonemes from KEEP_PHONEMES_KOREAN")
+
+            # Step 3.2: [HYBRID] If insufficient, add top frequent phonemes
+            if len(unique_kept) < 10:
+                self.logger.warning(f"Only {len(unique_kept)} kept phonemes, adding frequent ones dynamically")
+
+                from collections import Counter
+                phoneme_counts = Counter(all_phonemes)
+
+                # Filter out special tokens and already kept phonemes
+                valid_phonemes = {p: c for p, c in phoneme_counts.items()
+                                  if p not in unique_kept  # Not already in whitelist
+                                  and not p.startswith('<') and not p.startswith('[')  # Not special token
+                                  and p not in ['', ' ', 'sp', 'spn']}  # Not silence
+
+                # Add top frequent until we have 14 total
+                additional = []
+                for p, count in sorted(valid_phonemes.items(), key=lambda x: x[1], reverse=True):
+                    additional.append(p)
+                    if len(unique_kept) + len(additional) >= 14:
+                        break
+
+                final_kept_set = unique_kept | set(additional)
+                self.logger.info(f"Step 3.2: Added {len(additional)} dynamic phonemes: {additional}")
+                self.logger.info(f"Final kept set ({len(final_kept_set)}): {sorted(final_kept_set)}")
+            else:
+                # Normal path: sufficient phonemes from whitelist
+                final_kept_set = unique_kept
+                self.logger.info(f"Step 3.2: Sufficient phonemes from whitelist, using {len(final_kept_set)}")
+
+            # Step 3.3: Filter phonemes and intervals using final kept set
+            filtered_phonemes = [p for p in all_phonemes if p in final_kept_set]
+            filtered_intervals = [interval for phoneme, interval in zip(all_phonemes, all_intervals)
+                                  if phoneme in final_kept_set]
 
             self.logger.info(f"Filtered: {len(filtered_phonemes)} phonemes kept (from {len(all_phonemes)})")
-            self.logger.info(f"Unique phonemes: {set(filtered_phonemes)}")
+            self.logger.info(f"Unique phonemes: {sorted(set(filtered_phonemes))}")
 
             # 단계 4: Phoneme-to-frame matching (if timestamps provided)
             phoneme_labels = np.array([], dtype=np.int32)
