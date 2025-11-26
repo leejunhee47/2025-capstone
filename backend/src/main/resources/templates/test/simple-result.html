@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>간단 결과 조회</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; background-color: #f9f9f9; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h1 { border-bottom: 2px solid #eee; padding-bottom: 15px; margin-top: 0; }
+
+        /* 상태 뱃지 스타일 */
+        .status-badge { display: inline-block; padding: 6px 12px; border-radius: 20px; font-weight: bold; color: white; font-size: 0.9em; margin-bottom: 20px; }
+        .status-COMPLETED { background-color: #2ecc71; }
+        .status-PROCESSING { background-color: #f39c12; }
+        .status-PENDING { background-color: #95a5a6; }
+        .status-FAILED { background-color: #e74c3c; }
+
+        /* 결과 박스 스타일 */
+        .result-box { background-color: #f8f9fa; border: 1px solid #e9ecef; padding: 25px; border-radius: 8px; margin-top: 15px; }
+        .result-item { margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed #ddd; padding-bottom: 10px; }
+        .result-item:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+
+        .label { font-weight: 600; color: #555; }
+        .value { font-size: 1.1em; font-weight: 500; }
+
+        /* 판독 결과 강조 */
+        .fake-warning { color: #e74c3c; font-weight: bold; font-size: 1.2em; } /* 빨간색 */
+        .real-safe { color: #2ecc71; font-weight: bold; font-size: 1.2em; }    /* 초록색 */
+
+        /* 버튼 */
+        .btn { display: inline-block; padding: 12px 24px; text-decoration: none; color: white; background-color: #3498db; border-radius: 6px; margin-top: 25px; cursor: pointer; border: none; font-size: 16px; transition: background 0.3s; }
+        .btn:hover { background-color: #2980b9; }
+        .btn-secondary { background-color: #7f8c8d; }
+        .btn-secondary:hover { background-color: #6c7a89; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>📋 간단 결과 리포트</h1>
+
+    <p>요청 ID: <strong th:text="${requestId}">123</strong></p>
+
+    <div th:if="${errorMessage}" style="color: #e74c3c; background: #fadbd8; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+        <h3 th:text="${errorMessage}" style="margin: 0;">에러 발생</h3>
+    </div>
+
+    <div th:unless="${errorMessage}">
+        <div>
+            처리 상태:
+            <span class="status-badge"
+                  th:classappend="'status-' + ${status}"
+                  th:text="${status}">PROCESSING</span>
+        </div>
+
+        <div th:if="${status == T(com.capstone.backend.detection.model.DetectionStatus).COMPLETED}" class="result-box">
+
+            <div class="result-item">
+                <span class="label">🔴 가짜(Fake) 확률</span>
+                <span class="value" style="color: #e74c3c;" th:text="${result.probabilityFake} + '%'">85.5%</span>
+            </div>
+
+            <div class="result-item">
+                <span class="label">🟢 진짜(Real) 확률</span>
+                <span class="value" style="color: #27ae60;" th:text="${result.probabilityReal} + '%'">14.5%</span>
+            </div>
+
+            <div class="result-item">
+                <span class="label">⏱️ 영상 길이</span>
+                <span class="value" th:text="${result.durationSec} + ' 초'">12.5 초</span>
+            </div>
+
+            <div class="result-item">
+                <span class="label">📅 분석 완료일</span>
+                <span class="value" th:text="${#temporals.format(result.createdAt, 'yyyy-MM-dd HH:mm')}">2024-05-20 14:30</span>
+            </div>
+
+            <div style="margin-top: 25px; text-align: center; background: white; padding: 15px; border-radius: 8px; border: 2px solid #eee;">
+                <div style="font-size: 0.9em; color: #777; margin-bottom: 5px;">최종 판독 결과</div>
+                <div th:if="${result.probabilityFake >= 50.0}" class="fake-warning">
+                    ⚠️ 딥페이크가 의심됩니다!
+                </div>
+                <div th:unless="${result.probabilityFake >= 50.0}" class="real-safe">
+                    ✅ 정상 영상으로 분석됩니다.
+                </div>
+            </div>
+        </div>
+
+        <div th:if="${status == T(com.capstone.backend.detection.model.DetectionStatus).PROCESSING or status == T(com.capstone.backend.detection.model.DetectionStatus).PENDING}">
+            <div style="text-align: center; padding: 40px 0;">
+                <p th:text="${message}" style="font-size: 1.1em; color: #555;">분석 중...</p>
+                <button onclick="location.reload()" class="btn">🔄 결과 확인하기 (새로고침)</button>
+            </div>
+        </div>
+    </div>
+
+    <div style="text-align: center;">
+        <hr style="margin: 30px 0; border: 0; border-top: 1px solid #eee;">
+        <a th:href="@{/api/test/detection/result/{id}(id=${requestId})}" class="btn btn-secondary">목록으로 돌아가기</a>
+    </div>
+</div>
+
+</body>
+</html>

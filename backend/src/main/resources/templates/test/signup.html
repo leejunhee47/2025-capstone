@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8">
+  <title>회원가입</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; display: flex; justify-content: center; }
+    .form-container { width: 400px; border: 1px solid #ddd; padding: 25px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    h2 { text-align: center; color: #333; }
+    label { display: block; margin-top: 15px; font-weight: bold; color: #555; }
+    input { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; }
+
+    /* 에러 메시지 스타일 */
+    .field-error { color: #dc3545; font-size: 0.9em; margin-top: 5px; display: block; }
+    .global-error { color: #dc3545; background-color: #f8d7da; padding: 10px; border-radius: 5px; margin-bottom: 15px; text-align: center; }
+
+    button { width: 100%; padding: 12px; background-color: #007bff; color: white; border: none; margin-top: 25px; cursor: pointer; font-size: 16px; border-radius: 5px; }
+    button:hover { background-color: #0056b3; }
+    .home-link { display: block; text-align: center; margin-top: 15px; text-decoration: none; color: #666; }
+  </style>
+</head>
+<body>
+
+<div class="form-container">
+  <h2>📝 회원가입</h2>
+
+  <div th:if="${errorMessage}" class="global-error" th:text="${errorMessage}"></div>
+
+  <form action="/api/test/member/signup" method="post" th:object="${signUpRequest}">
+
+    <div>
+      <label for="username">아이디</label>
+      <input type="text" id="username" th:field="*{username}" placeholder="영문 소문자+숫자 (4~20자)"
+             th:classappend="${#fields.hasErrors('username')} ? 'input-error' : ''">
+      <span class="field-error" th:if="${#fields.hasErrors('username')}" th:errors="*{username}">에러 메시지</span>
+    </div>
+
+    <div>
+      <label for="name">이름</label>
+      <input type="text" id="name" th:field="*{name}" placeholder="한글 이름"
+             th:classappend="${#fields.hasErrors('name')} ? 'input-error' : ''">
+      <span class="field-error" th:if="${#fields.hasErrors('name')}" th:errors="*{name}">에러 메시지</span>
+    </div>
+
+    <div>
+      <label for="password">비밀번호</label>
+      <input type="password" id="password" th:field="*{password}" placeholder="영문+숫자+특수문자 (8~16자)"
+             th:classappend="${#fields.hasErrors('password')} ? 'input-error' : ''">
+      <span class="field-error" th:if="${#fields.hasErrors('password')}" th:errors="*{password}">에러 메시지</span>
+    </div>
+
+    <div>
+      <label for="passwordConfirm">비밀번호 확인</label>
+      <input type="password" id="passwordConfirm" th:field="*{passwordConfirm}" placeholder="비밀번호 재입력"
+             th:classappend="${#fields.hasErrors('passwordConfirm')} ? 'input-error' : ''">
+      <span class="field-error" th:if="${#fields.hasErrors('passwordConfirm')}" th:errors="*{passwordConfirm}">에러 메시지</span>
+    </div>
+
+    <button type="submit">가입하기</button>
+  </form>
+
+  <a href="/api/test/member/home" class="home-link">홈으로 돌아가기</a>
+</div>
+
+</body>
+</html>

@@ -11,7 +11,7 @@ import java.util.List;
 
 @Entity
 @Getter
-@NoArgsConstructor(access = AccessLevel.PROTECTED)
+@NoArgsConstructor
 @AllArgsConstructor
 @Builder
 public class DetectionResult {
@@ -63,6 +63,7 @@ public class DetectionResult {
     @Column(columnDefinition = "TEXT") // 긴 텍스트
     private String summaryDetailedExplanation;
 
+    @Builder.Default
     @OneToMany(
             mappedBy = "detectionResult",
             fetch = FetchType.LAZY

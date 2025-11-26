@@ -64,6 +64,7 @@ public class AiWorker {
 
         // 3. 일감이 있으면 AI 스크립트 실행 (여기서 실행 끝날 때까지 대기함)
         log.info("AI 분석 시작: ID={}, 파일={}", detectionRequest.getRequestId(), detectionRequest.getVideoPath());
+        // Todo : fast api 호출 (더 빠름)
         processRequest(detectionRequest);
     }
 
@@ -153,28 +154,36 @@ public class AiWorker {
             return false;
         }
     }
+
     private void sendResultToBackend(String requestId, String jsonResult, File img1, File img2) {
         try {
-            // 헤더 설정: Multipart Form Data
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+            // 1. 전체 요청의 헤더 (Multipart Form Data)
+            HttpHeaders mainHeaders = new HttpHeaders();
+            mainHeaders.setContentType(MediaType.MULTIPART_FORM_DATA);
 
-            // Body 설정: MultiValueMap 사용
+            // Body 설정
             MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
 
-            // 1. JSON 데이터 추가 (백엔드에서 받을 키 이름: "data" 혹은 "result" 등 백엔드와 맞춰야 함)
-            // JSON을 문자열로 보내거나, application/json 타입을 명시하려면 HttpEntity로 감싸야 할 수도 있음
-            body.add("result", jsonResult);
+            // ================= [수정된 부분 시작] =================
+            // 2. JSON 데이터 추가 시 헤더(application/json)를 명시해야 함
+            HttpHeaders jsonHeaders = new HttpHeaders();
+            jsonHeaders.setContentType(MediaType.APPLICATION_JSON);
 
-            // 2. 이미지 파일 추가 (FileSystemResource 사용)
-            // 백엔드에서 받을 파라미터 이름: "files" 혹은 "images" 등 맞춰야 함
+            // 내용물(jsonResult)과 헤더(jsonHeaders)를 묶어서 HttpEntity로 만듦
+            HttpEntity<String> jsonEntity = new HttpEntity<>(jsonResult, jsonHeaders);
+
+            body.add("result", jsonEntity);
+            // ================= [수정된 부분 끝] ===================
+
+            // 3. 이미지 파일 추가 (FileSystemResource 사용)
             body.add("images", new FileSystemResource(img1));
             body.add("images", new FileSystemResource(img2));
 
-            HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
+            // 전체 요청 엔티티 생성
+            HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, mainHeaders);
 
             String targetUrl = backendUrl.endsWith("/") ? backendUrl + "result" : backendUrl + "/result";
-            log.info("백엔드 결과 전송 시도 (Multipart) [RequestId: {}] -> {}", requestId, targetUrl);
+            log.info("백엔드 결과 전송 시도 [RequestId: {}] -> {}", requestId, targetUrl);
 
             ResponseEntity<String> response = restTemplate.postForEntity(
                     targetUrl,

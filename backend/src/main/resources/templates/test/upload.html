@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>영상 업로드</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+        .container { border: 1px solid #ccc; padding: 30px; width: 450px; margin: 0 auto; border-radius: 10px; background-color: #f9f9f9; }
+
+        /* 입력 요소 스타일 */
+        .form-group { margin: 15px 0; text-align: left; }
+        label { display: block; font-weight: bold; margin-bottom: 5px; }
+        input[type="text"] { width: 100%; padding: 8px; box-sizing: border-box; }
+        input[type="file"] { padding: 10px 0; }
+
+        /* 버튼 스타일 */
+        button { background-color: #007bff; color: white; border: none; padding: 12px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; width: 100%; margin-top: 10px;}
+        button:hover { background-color: #0056b3; }
+
+        /* 메시지 스타일 */
+        .error-msg { color: #dc3545; background-color: #f8d7da; padding: 10px; border-radius: 5px; margin-bottom: 15px; }
+        .success-msg { color: #155724; background-color: #d4edda; padding: 10px; border-radius: 5px; margin-bottom: 15px; }
+
+        .back-link { display: block; margin-top: 20px; text-decoration: none; color: #666; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>📹 딥페이크 분석 요청</h2>
+    <p>분석할 영상과 결과를 받을 URL을 입력하세요.</p>
+
+    <div th:if="${errorMessage}" class="error-msg" th:text="${errorMessage}"></div>
+
+    <div th:if="${message}" class="success-msg" th:text="${message}"></div>
+
+    <form action="/api/test/detection/upload" method="post" enctype="multipart/form-data">
+
+        <div class="form-group">
+            <label for="callbackUrl">Callback URL</label>
+            <input type="text" id="callbackUrl" name="callbackUrl"
+                   th:value="${defaultCallbackUrl}"
+                   placeholder="예: http://myserver.com/result">
+            <small style="color: gray;">분석 완료 후 결과를 전송받을 주소입니다.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="file">영상 파일 (mp4, mov 등)</label>
+            <input type="file" id="file" name="file" accept="video/*" required>
+        </div>
+
+        <button type="submit">🚀 분석 시작하기</button>
+    </form>
+
+    <a href="/api/test/member/home" class="back-link">홈으로 돌아가기</a>
+</div>
+
+</body>
+</html>

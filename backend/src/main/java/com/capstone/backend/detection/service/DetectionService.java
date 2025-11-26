@@ -67,14 +67,19 @@ public class DetectionService {
     public DetectionRequest saveNewDetectionRequest(Member member,
                                                     String callbackUrl){
         // (기존과 동일)
-        DetectionRequest newRequest = DetectionRequest.builder()
-                .member(member)
-                .callbackUrl(callbackUrl)
-                .build();
+        DetectionRequest newRequest = new DetectionRequest();
+        newRequest.setMember(member);
+        newRequest.setCallbackUrl(callbackUrl);
+        newRequest.setStatus(DetectionStatus.PENDING);
+        newRequest.setThumbnailPath("hi");
+        newRequest.setVideoPath("hi");
+        newRequest.setResultPath("hi");
+
 
         return detectionRequestRepository.save(newRequest);
     }
-    @Async
+
+
     @Transactional
     public void startFileDetection(DetectionRequest request , String savedFilePath) throws IllegalArgumentException{
 
@@ -87,17 +92,17 @@ public class DetectionService {
 
         try {
 
-            managedRequest.setVideoPath(savedFilePath);
 
+            log.info("1");
+            managedRequest.setVideoPath(savedFilePath);
 
             // 썸네일 따놓기
             String thumbnailPath = extractThumbnail(savedFilePath, managedRequest.getRequestId());
             managedRequest.setThumbnailPath(thumbnailPath);
-
-
+            log.info("2");
             managedRequest.setStatus(DetectionStatus.PROCESSING);
             detectionRequestRepository.save(managedRequest);
-
+            log.info("3");
             // AI 서버에 분석 요청
             log.info("AI 서버 분석 요청 시작. Request ID: {}", managedRequest.getRequestId());
 
@@ -125,6 +130,9 @@ public class DetectionService {
         }
     }
 
+
+
+    // todo : 비동기 일때 , DB 상태 안바뀌는 이유 탐색
     @Async
     @Transactional
     public void startUrlDetection(DetectionRequest request ,  String url) {
@@ -223,7 +231,7 @@ public class DetectionService {
         }
 
         // 저장될 썸네일 파일 경로 (예: /path/to/thumbs/10.jpg)
-        String outputThumbnailPath = thumbnailUploadDir + File.separator + requestId + ".jpg";
+        String outputThumbnailPath = thumbnailUploadDir + requestId + ".jpg";
 
         // FFmpeg 명령어 구성
         // -i [입력영상] -ss 00:00:01 (1초 지점) -vframes 1 (1프레임만) -y (덮어쓰기) [출력이미지]
@@ -330,6 +338,8 @@ public class DetectionService {
         return DetectionDetailResponse.from(result);
     }
 
+
+
     /**
      * 커서 기반 페이지네이션 조회
      */
@@ -375,6 +385,9 @@ public class DetectionService {
                         .build())
                 .build();
     }
+
+
+
 
     /**
      * 결과 ID를 받아 이미지 리포트 URL 리스트를 포함한 응답을 반환
@@ -430,6 +443,37 @@ public class DetectionService {
         }
         return file;
     }
+
+    /**
+     * Result ID를 기반으로 썸네일 파일 객체를 반환
+     */
+    @Transactional(readOnly = true)
+    public File getThumbnailFileByResultId(Long resultId) {
+        // 1. Result 조회
+        DetectionResult result = detectionResultRepository.findById(resultId)
+                .orElseThrow(() -> new IllegalArgumentException("Detection result not found with ID: " + resultId));
+
+        // 2. Result와 연결된 Request 조회
+        DetectionRequest request = result.getDetectionRequest();
+        if (request == null) {
+            throw new IllegalArgumentException("Associated request not found for result ID: " + resultId);
+        }
+
+        // 3. 경로 확인
+        String path = request.getThumbnailPath();
+        if (path == null) {
+            throw new IllegalArgumentException("Thumbnail path is null for result ID: " + resultId);
+        }
+
+        // 4. 파일 존재 여부 확인
+        File file = new File(path);
+        if (!file.exists()) {
+            throw new IllegalArgumentException("Thumbnail file missing on server");
+        }
+
+        return file;
+    }
+
 
 
     public void testDetection(){

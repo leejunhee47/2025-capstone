@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8">
+  <title>썸네일 확인 테스트</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; text-align: center; max-width: 800px; margin: 0 auto;}
+    .container { border: 1px solid #ddd; padding: 20px; border-radius: 10px; margin-top: 20px;}
+    .image-box { margin-top: 20px; min-height: 200px; display: flex; align-items: center; justify-content: center; background: #f9f9f9; border: 2px dashed #ccc;}
+    img { max-width: 100%; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+    .badge { display: inline-block; padding: 5px 10px; border-radius: 15px; color: white; font-weight: bold;}
+    .COMPLETED { background-color: #27ae60; }
+    .PROCESSING { background-color: #f39c12; }
+    .FAILED { background-color: #c0392b; }
+    .btn { padding: 10px 20px; background-color: #3498db; color: white; text-decoration: none; border-radius: 5px; border: none; cursor: pointer;}
+    .btn:hover { background-color: #2980b9; }
+  </style>
+</head>
+<body>
+
+<h1>🖼️ 썸네일 API 테스트</h1>
+
+<div class="container">
+  <h3>요청 정보</h3>
+  <p>Request ID: <strong th:text="${requestId}"></strong></p>
+  <p>Status: <span class="badge" th:classappend="${status}" th:text="${status}"></span></p>
+
+  <div th:if="${resultId != null}">
+    <p>Result ID: <strong th:text="${resultId}" style="color: #d35400;"></strong></p>
+
+    <hr>
+
+    <h3>1. GET 방식 (Result ID 기반)</h3>
+    <p>API 경로: <code>/api/v1/record/{resultId}/thumbnail</code></p>
+    <p>HTML <code>&lt;img&gt;</code> 태그에 src로 직접 연결하여 이미지를 로드합니다.</p>
+
+    <div class="image-box">
+      <img th:src="@{/api/v1/record/{resultId}/thumbnail(resultId=${resultId})}" alt="Detection Thumbnail">
+    </div>
+  </div>
+
+  <div th:unless="${resultId != null}">
+    <p style="color: #7f8c8d;">
+      분석이 완료되지 않아 Result ID가 생성되지 않았습니다.<br>
+      새로고침을 눌러 상태를 확인하세요.
+    </p>
+    <button onclick="location.reload()" class="btn">🔄 새로고침</button>
+  </div>
+</div>
+
+<div class="container" style="margin-top: 30px; border-color: #eee;">
+  <h3>2. POST 방식 (Polling, Request ID 기반)</h3>
+  <p>API 경로: <code>/api/v1/detection/thumbnail/polling</code></p>
+  <p>자바스크립트 fetch를 사용하여 이미지를 Blob으로 받아옵니다.</p>
+
+  <button id="pollBtn" class="btn" style="background-color: #9b59b6;">폴링 이미지 가져오기</button>
+
+  <div class="image-box" id="pollingImageBox">
+    <span style="color:#aaa;">버튼을 누르면 여기에 이미지가 로드됩니다.</span>
+  </div>
+</div>
+
+<div style="margin-top: 30px;">
+  <a th:href="@{/api/test/detection/result/{id}(id=${requestId})}" style="color: #666;">🔙 결과 목록으로 돌아가기</a>
+</div>
+
+<script th:inline="javascript">
+  /* Thymeleaf 변수 가져오기 */
+  const requestId = [[${requestId}]];
+
+  document.getElementById('pollBtn').addEventListener('click', function() {
+    const container = document.getElementById('pollingImageBox');
+    container.innerHTML = '로딩 중...';
+
+    // 1. Form Data 생성
+    const formData = new FormData();
+    formData.append('requestId', requestId);
+
+    // 2. Fetch 요청 (POST)
+    fetch('/api/v1/detection/thumbnail/polling', {
+      method: 'POST',
+      body: formData
+    })
+            .then(response => {
+              if (response.status === 200) {
+                return response.blob(); // 이미지 데이터를 Blob으로 변환
+              } else if (response.status === 202) {
+                throw new Error("아직 썸네일 생성 중입니다 (202 Accepted)");
+              } else {
+                throw new Error("이미지 로드 실패 (Status: " + response.status + ")");
+              }
+            })
+            .then(blob => {
+              // 3. Blob URL 생성 및 이미지 표시
+              const imageUrl = URL.createObjectURL(blob);
+              container.innerHTML = `<img src="${imageUrl}" alt="Polling Thumbnail" />`;
+            })
+            .catch(err => {
+              container.innerHTML = `<span style="color: red;">${err.message}</span>`;
+            });
+  });
+</script>
+
+</body>
+</html>

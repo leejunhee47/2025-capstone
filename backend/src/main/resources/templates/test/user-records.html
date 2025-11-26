@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8">
+  <title>나의 분석 기록 테스트</title>
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; padding: 40px; background-color: #f4f6f8; }
+    .container { max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+
+    /* 상단 로그인 테스트 섹션 */
+    .auth-section { background-color: #eaf2f8; padding: 20px; border-radius: 8px; margin-bottom: 30px; border: 1px solid #bdc3c7; }
+    .auth-section h3 { margin-top: 0; color: #2980b9; }
+    .input-group { display: flex; gap: 10px; align-items: center; }
+    input[type="number"] { padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: 150px; }
+
+    h1 { color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 15px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #ddd; }
+    th { background-color: #f8f9fa; font-weight: 600; color: #555; }
+    tr:hover { background-color: #f1f1f1; cursor: pointer; }
+
+    .score-real { color: #27ae60; font-weight: bold; }
+    .score-fake { color: #c0392b; font-weight: bold; }
+    .badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 0.8em; color: white; background-color: #95a5a6; }
+
+    .btn { padding: 8px 15px; background-color: #3498db; color: white; border: none; border-radius: 5px; cursor: pointer; transition: background 0.3s; }
+    .btn:hover { background-color: #2980b9; }
+    .btn-load { display: block; width: 100%; margin-top: 20px; padding: 15px; font-size: 16px; background-color: #95a5a6; }
+    .btn-load.active { background-color: #3498db; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+
+  <div class="auth-section">
+    <h3>🛠️ 테스트 환경 설정</h3>
+    <p>테스트하고 싶은 <strong>Member ID</strong>를 입력하세요. (해당 ID로 세션이 생성됩니다)</p>
+    <div class="input-group">
+      <input type="number" id="testMemberId" placeholder="Member ID (ex: 1)" value="1">
+      <button class="btn" onclick="setTestSession()">1. 사용자 로그인(세션 설정)</button>
+    </div>
+    <p id="authStatus" style="color: green; font-weight: bold; margin-top: 10px;"></p>
+  </div>
+
+  <h1>
+    <span>📜 분석 기록 조회</span>
+    <button class="btn" onclick="resetAndLoad()" style="font-size: 0.6em; float: right;">🔄 새로고침</button>
+  </h1>
+
+  <table>
+    <thead>
+    <tr>
+      <th>Result ID</th>
+      <th>생성일시</th>
+      <th>분석 시간</th>
+      <th>Real / Fake</th>
+      <th>상세</th>
+    </tr>
+    </thead>
+    <tbody id="recordList">
+    </tbody>
+  </table>
+
+  <div id="emptyMsg" style="text-align: center; padding: 30px; color: #999; display: none;">
+    표시할 데이터가 없습니다. (로그인이 되어있지 않거나 기록이 없음)
+  </div>
+
+  <button id="loadMoreBtn" class="btn btn-load" onclick="loadRecords()" style="display: none;">
+    ⬇️ 더 보기 (Load More)
+  </button>
+</div>
+
+<script>
+  let nextCursor = null; // 다음 페이지 커서
+  let hasNext = false;
+  let isLoading = false;
+  const limit = 5;       // 한 페이지당 개수 (테스트를 위해 작게 설정)
+
+  // 1. 세션 설정 (Mock Login)
+  function setTestSession() {
+    const memberId = document.getElementById('testMemberId').value;
+    if (!memberId) { alert("Member ID를 입력하세요."); return; }
+
+    fetch(`/api/test/detection/auth/mock?memberId=${memberId}`, { method: 'POST' })
+            .then(res => {
+              if (res.ok) return res.text();
+              throw new Error("세션 설정 실패");
+            })
+            .then(msg => {
+              document.getElementById('authStatus').textContent = "✅ " + msg;
+              // 세션 설정 성공 후 리스트 초기화 및 로드
+              resetAndLoad();
+            })
+            .catch(err => {
+              alert(err.message);
+              document.getElementById('authStatus').textContent = "❌ 설정 실패";
+            });
+  }
+
+  // 초기화 후 로드
+  function resetAndLoad() {
+    document.getElementById('recordList').innerHTML = '';
+    nextCursor = null;
+    hasNext = false;
+    loadRecords();
+  }
+
+  // 2. 실제 데이터 조회 (GET /api/v1/record)
+  function loadRecords() {
+    if (isLoading) return;
+    isLoading = true;
+
+    // 쿼리 파라미터 구성
+    let url = `/api/v1/record?limit=${limit}`;
+    if (nextCursor) {
+      url += `&cursor=${nextCursor}`;
+    }
+
+    fetch(url)
+            .then(response => {
+              if (response.status === 401) {
+                throw new Error("로그인이 필요합니다. 위에서 '사용자 로그인'을 먼저 해주세요.");
+              }
+              if (!response.ok) throw new Error("데이터 조회 에러 (" + response.status + ")");
+              return response.json();
+            })
+            .then(data => {
+              // data = DetectionListResponse { items: [], pageInfo: { ... } }
+              renderItems(data.items);
+              updatePagination(data.pageInfo);
+            })
+            .catch(err => {
+              console.error(err);
+              if(document.getElementById('recordList').children.length === 0) {
+                document.getElementById('emptyMsg').textContent = "⚠️ " + err.message;
+                document.getElementById('emptyMsg').style.display = 'block';
+              } else {
+                alert(err.message);
+              }
+            })
+            .finally(() => {
+              isLoading = false;
+            });
+  }
+
+  // 테이블 렌더링
+  function renderItems(items) {
+    const tbody = document.getElementById('recordList');
+    const emptyMsg = document.getElementById('emptyMsg');
+
+    if (!items || items.length === 0) {
+      if (tbody.children.length === 0) emptyMsg.style.display = 'block';
+      return;
+    }
+    emptyMsg.style.display = 'none';
+
+    items.forEach(item => {
+      const tr = document.createElement('tr');
+      tr.onclick = () => location.href = `/api/test/detection/result/detail/${item.resultId}`; // 상세 페이지 이동
+
+      const date = new Date(item.createdAt).toLocaleString();
+      const real = (item.probabilityReal * 100).toFixed(1);
+      const fake = (item.probabilityFake * 100).toFixed(1);
+
+      tr.innerHTML = `
+                <td>#${item.resultId}</td>
+                <td style="color:#666; font-size:0.9em;">${date}</td>
+                <td>${item.durationSec}s</td>
+                <td>
+                    <span class="score-real">Real ${real}%</span> /
+                    <span class="score-fake">Fake ${fake}%</span>
+                </td>
+                <td><span class="badge">View</span></td>
+            `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  // 더 보기 버튼 상태 업데이트
+  function updatePagination(pageInfo) {
+    const btn = document.getElementById('loadMoreBtn');
+
+    if (pageInfo && pageInfo.hasNextPage) {
+      nextCursor = pageInfo.nextCursor;
+      hasNext = true;
+      btn.style.display = 'block';
+      btn.classList.add('active');
+      btn.textContent = '⬇️ 더 보기 (Load More)';
+    } else {
+      nextCursor = null;
+      hasNext = false;
+      btn.style.display = 'none';
+    }
+  }
+</script>
+
+</body>
+</html>

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>상세 결과 API 테스트</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; padding: 40px; background-color: #f4f6f9; color: #333; }
+        .container { max-width: 900px; margin: 0 auto; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+
+        h1 { border-bottom: 2px solid #eee; padding-bottom: 15px; margin-top: 0; }
+        .api-info { background: #e8f0fe; padding: 10px; border-radius: 5px; color: #1967d2; font-family: monospace; margin-bottom: 20px; }
+
+        /* 로딩/에러 메시지 */
+        .status-msg { text-align: center; font-size: 1.2em; padding: 30px; font-weight: bold; }
+        .loading { color: #f39c12; }
+        .error { color: #e74c3c; }
+
+        /* 데이터 표시 영역 (처음엔 숨김) */
+        #data-container { display: none; }
+
+        /* 섹션 스타일 */
+        h2 { margin-top: 40px; font-size: 1.3em; border-left: 5px solid #3498db; padding-left: 10px; color: #2c3e50; }
+
+        .grid-box { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; }
+        .info-card { background: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #eee; }
+        .label { font-size: 0.8em; color: #7f8c8d; font-weight: bold; display: block; margin-bottom: 5px; text-transform: uppercase; }
+        .value { font-size: 1.1em; font-weight: 600; color: #2c3e50; }
+
+        /* 판정 스타일 */
+        .verdict-FAKE { color: #c0392b; }
+        .verdict-REAL { color: #27ae60; }
+
+        /* 요약 박스 */
+        .summary-box { background-color: #fff8f8; border: 1px solid #f5c6cb; padding: 20px; border-radius: 8px; margin-top: 15px; }
+        .phoneme-badge { display: inline-block; background: #ffebee; color: #c62828; padding: 2px 8px; border-radius: 12px; font-size: 0.9em; margin-right: 5px; font-weight: bold; }
+
+        .btn { display: inline-block; padding: 10px 20px; background: #95a5a6; color: white; text-decoration: none; border-radius: 5px; margin-top: 30px; }
+        .btn:hover { background: #7f8c8d; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>📊 상세 결과 API 검증</h1>
+
+    <div class="api-info">
+        Target API: <span id="target-url">Waiting...</span>
+    </div>
+
+    <div id="status-display" class="status-msg loading">
+        <span th:if="${resultId != null}">데이터 로딩 중...</span>
+        <span th:unless="${resultId != null}" th:text="${message}">분석 대기 중...</span>
+    </div>
+
+    <div id="data-container">
+
+        <h2>🎥 영상 정보 (Video Info)</h2>
+        <div class="grid-box">
+            <div class="info-card"><span class="label">재생 시간</span><span class="value" id="durationSec">-</span> sec</div>
+            <div class="info-card"><span class="label">해상도</span><span class="value" id="resolution">-</span></div>
+            <div class="info-card"><span class="label">FPS</span><span class="value" id="fps">-</span></div>
+            <div class="info-card"><span class="label">총 프레임</span><span class="value" id="totalFrames">-</span></div>
+        </div>
+
+        <h2>🔎 탐지 정보 (Detection Info)</h2>
+        <div class="grid-box">
+            <div class="info-card"><span class="label">판정 (Verdict)</span><span class="value" id="verdict">-</span></div>
+            <div class="info-card"><span class="label">신뢰도</span><span class="value" id="confidence">-</span></div>
+            <div class="info-card"><span class="label">가짜 확률</span><span class="value" id="probFake" style="color:#e74c3c;">-</span></div>
+            <div class="info-card"><span class="label">진짜 확률</span><span class="value" id="probReal" style="color:#27ae60;">-</span></div>
+        </div>
+
+        <h2>📝 AI 요약 (Summary Info)</h2>
+        <div class="summary-box">
+            <h3 id="summaryTitle" style="margin-top:0;">-</h3>
+            <p><strong>위험도:</strong> <span id="summaryRiskLevel">-</span></p>
+            <p><strong>주요 원인:</strong> <span id="summaryPrimaryReason">-</span></p>
+            <p><strong>의심 음소:</strong> <span id="phonemesArea">-</span></p>
+            <hr style="border-top:1px dashed #ccc;">
+            <p id="summaryDetailedExplanation" style="white-space: pre-wrap; color:#555;">-</p>
+        </div>
+
+        <div style="margin-top: 15px; font-size: 0.8em; color: #aaa;">
+            Data fetched at: <span id="fetchedAt">-</span>
+        </div>
+    </div>
+
+    <a th:href="@{/api/test/detection/result/{id}(id=${requestId})}" class="btn">목록으로 돌아가기</a>
+</div>
+
+<script th:if="${resultId != null}">
+    const resultId = [[${resultId}]]; // 타임리프 변수 -> JS 변수
+    const apiUrl = '/api/v1/record/' + resultId;
+
+    document.getElementById('target-url').innerText = "GET " + apiUrl;
+
+    // 페이지 로드 시 Fetch 실행
+    fetch(apiUrl)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error("API Error: " + response.status);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log("Response Data:", data); // 디버깅용 로그
+
+            // 1. Video Info 바인딩
+            document.getElementById('durationSec').innerText = data.durationSec;
+            document.getElementById('resolution').innerText = data.resolution;
+            document.getElementById('fps').innerText = data.fps;
+            document.getElementById('totalFrames').innerText = data.totalFrames;
+
+            // 2. Detection Info 바인딩
+            const verdictEl = document.getElementById('verdict');
+            verdictEl.innerText = data.verdict;
+            verdictEl.className = "value " + (data.verdict === 'FAKE' ? 'verdict-FAKE' : 'verdict-REAL');
+
+            document.getElementById('confidence').innerText = (data.confidence * 100).toFixed(1) + "%";
+            document.getElementById('probFake').innerText = data.probabilityFake.toFixed(1) + "%";
+            document.getElementById('probReal').innerText = data.probabilityReal.toFixed(1) + "%";
+
+            // 3. Summary Info 바인딩
+            document.getElementById('summaryTitle').innerText = data.summaryTitle;
+            document.getElementById('summaryRiskLevel').innerText = data.summaryRiskLevel;
+            document.getElementById('summaryPrimaryReason').innerText = data.summaryPrimaryReason;
+            document.getElementById('summaryDetailedExplanation').innerText = data.summaryDetailedExplanation;
+
+            // 음소 리스트 처리
+            const phonemesArea = document.getElementById('phonemesArea');
+            if (data.summaryTopSuspiciousPhonemes && data.summaryTopSuspiciousPhonemes.length > 0) {
+                phonemesArea.innerHTML = ""; // 초기화
+                data.summaryTopSuspiciousPhonemes.forEach(ph => {
+                    const span = document.createElement("span");
+                    span.className = "phoneme-badge";
+                    span.innerText = ph;
+                    phonemesArea.appendChild(span);
+                });
+            } else {
+                phonemesArea.innerText = "없음";
+            }
+
+            // 4. UI 전환
+            document.getElementById('status-display').style.display = 'none';
+            document.getElementById('data-container').style.display = 'block';
+            document.getElementById('fetchedAt').innerText = new Date().toLocaleString();
+        })
+        .catch(error => {
+            console.error(error);
+            const statusDiv = document.getElementById('status-display');
+            statusDiv.innerText = "❌ 데이터 로드 실패: " + error.message;
+            statusDiv.className = "status-msg error";
+        });
+</script>
+
+</body>
+</html>
