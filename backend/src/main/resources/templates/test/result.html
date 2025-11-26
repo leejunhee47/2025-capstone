@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>분석 요청 완료</title>
+    <!-- 스타일은 간단하게 잡았습니다 -->
+    <style>
+        body { font-family: sans-serif; padding: 40px; text-align: center; }
+        .container { max-width: 600px; margin: 0 auto; border: 1px solid #ddd; padding: 30px; border-radius: 10px; }
+        h1 { color: #2c3e50; }
+        .info { margin-bottom: 30px; color: #666; }
+        .btn-group { display: flex; flex-direction: column; gap: 15px; }
+        .btn {
+            display: block;
+            padding: 15px;
+            text-decoration: none;
+            color: white;
+            background-color: #3498db;
+            border-radius: 5px;
+            font-size: 18px;
+            transition: background 0.3s;
+        }
+        .btn:hover { background-color: #2980b9; }
+        .btn.secondary { background-color: #95a5a6; }
+        .btn.secondary:hover { background-color: #7f8c8d; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>업로드 및 요청 성공!</h1>
+
+    <div class="info">
+        <p>요청 ID: <strong th:text="${requestId}">123</strong></p>
+        <p>현재 백그라운드에서 AI 분석이 진행 중일 수 있습니다.</p>
+        <p>아래 버튼을 눌러 각 API를 테스트해보세요.</p>
+    </div>
+
+    <div class="btn-group">
+        <!-- 1. 간단 결과 -->
+        <!-- 예: /api/result/simple/1 -->
+        <a th:href="@{/api/test/detection/result/simple/{id}(id=${requestId})}" class="btn">
+            📋 간단 결과 조회
+        </a>
+
+        <!-- 2. 썸네일 -->
+        <!-- 예: /api/result/thumbnail/1 -->
+        <a th:href="@{/api/test/detection/result/thumbnail/{id}(id=${requestId})}" class="btn">
+            🖼️ 썸네일 확인
+        </a>
+
+        <!-- 3. 상세 결과 -->
+        <a th:href="@{/api/test/detection/result/detail/{id}(id=${requestId})}" class="btn">
+            📊 상세 결과 조회
+        </a>
+
+        <!-- 4. 유저 결과 -->
+        <a th:href="@{/api/test/detection/records}" class="btn">
+            👤 유저 결과 확인
+        </a>
+
+        <!-- 5. 결과 보고서 -->
+        <a th:href="@{/api/test/detection/result/report/{id}(id=${requestId})}" class="btn">
+            📑 결과 보고서 다운로드
+        </a>
+
+        <hr style="width: 100%; border: 0; border-top: 1px solid #eee; margin: 10px 0;">
+
+        <!-- 홈으로 가기 -->
+        <a th:href="@{/api/test/detection/upload}" class="btn secondary">
+            🔙 다시 업로드하기
+        </a>
+    </div>
+</div>
+
+</body>
+</html>

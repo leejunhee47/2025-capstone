@@ -3,8 +3,10 @@ package com.capstone.backend.member.request.login;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 @Data
+@NoArgsConstructor
 public class LoginRequest {
 
     @NotBlank(message = "아이디를 입력해주세요.")

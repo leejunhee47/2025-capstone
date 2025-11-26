@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Deepfake Detection Home</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding-top: 50px; }
+        .container { border: 1px solid #ccc; padding: 20px; width: 300px; margin: 0 auto; border-radius: 10px; }
+        .btn { display: block; width: 100%; padding: 10px; margin: 10px 0; text-decoration: none; color: white; background-color: #007bff; border-radius: 5px; }
+        .btn-login { background-color: #28a745; }
+        .btn-logout { background-color: #dc3545; }
+        .welcome-msg { color: #333; font-weight: bold; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🛡️ 딥페이크 탐지</h1>
+
+    <div th:if="${session.loginMember != null}">
+        <p class="welcome-msg">
+            👋 <span th:text="${session.loginMember.name}">사용자</span>님 환영합니다!
+        </p>
+        <a href="/api/test/detection/upload" class="btn">딥페이크 탐지 시작하기</a>
+        <a href="/api/test/member/logout" class="btn btn-logout">로그아웃</a>
+    </div>
+
+    <div th:if="${session.loginMember == null}">
+        <p>서비스 이용을 위해 로그인해주세요.</p>
+        <a href="/api/test/member/login" class="btn btn-login">로그인</a>
+        <a href="/api/test/member/signup" class="btn">회원가입</a>
+    </div>
+
+</div>
+
+</body>
+</html>

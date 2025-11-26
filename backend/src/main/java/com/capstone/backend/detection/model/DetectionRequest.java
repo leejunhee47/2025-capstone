@@ -2,7 +2,6 @@ package com.capstone.backend.detection.model;
 
 import com.capstone.backend.member.model.Member;
 import jakarta.persistence.*;
-import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.CreationTimestamp;
@@ -43,14 +42,14 @@ public class DetectionRequest {
 //    @Column
 //    private Long fileSize;
 
-    @Column // 원본 영상 경로
+    @Column(nullable = false, length = 2048)
     private String videoPath;
 
-    @Column // 썸네일 경로
+    @Column(nullable = false, length = 2048)
     private String thumbnailPath;
 
 
-    @Column // 분석 결과 경로
+    @Column(nullable = false, length = 2048)
     private String resultPath;
 
     // --------
@@ -60,11 +59,5 @@ public class DetectionRequest {
     private LocalDateTime createdAt;
 
 
-    @Builder
-    public DetectionRequest(Member member, String callbackUrl) {
-        this.member = member;
-        this.callbackUrl = callbackUrl;
-        this.status = DetectionStatus.PENDING;
-    }
 
 }

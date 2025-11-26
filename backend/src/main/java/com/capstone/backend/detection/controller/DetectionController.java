@@ -28,7 +28,7 @@ import java.util.List;
 
 @Slf4j
 @RestController
-@RequestMapping("/api/v1")
+@RequestMapping("/api/v1/")
 public class DetectionController {
 
     private final Tika tika = new Tika();
@@ -95,8 +95,6 @@ public class DetectionController {
             // 2-3. 파일 저장 (동기식으로 먼저 실행)
             file.transferTo(dest);
 
-
-
             // 3. 비동기 처리 시작
             detectionService.startFileDetection(newRequest , dest.getPath());
 
@@ -157,17 +155,22 @@ public class DetectionController {
                     .body(errorResponse);
         }
 
+
+
+
         // 사용자에게 즉시 응답
         DetectionCheckResponse response = new DetectionCheckResponse(newRequest.getRequestId());
         return ResponseEntity.accepted().body(response);
     }
-
     // AI 서버 -> 백엔드 서버 (결과: JSON + Images)
     @PostMapping(value = "detection/result", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<?> getDetectionResult(
             @RequestPart("result") AiResultResponse aiResultResponse,
             @RequestPart(value = "images", required = false) List<MultipartFile> images
     ) {
+
+        log.info("결과 수신됨. Metadata: {}", aiResultResponse.getMetadata());
+
         try {
             // 1. RequestId 추출 (파일명 생성을 위해)
             String rawId = aiResultResponse.getMetadata().getRequestId();
@@ -219,7 +222,6 @@ public class DetectionController {
 
         return ResponseEntity.ok().build();
     }
-
 
     // 백엔드 서버 -> 클라이언트 (간단 결과)
     @PostMapping("detection/result/polling")
@@ -382,6 +384,7 @@ public class DetectionController {
         }
     }
 
+
     // 백엔드 서버 -> 클라이언트 (결과 이미지 경로)
     @GetMapping("record/{resultId}/report")
     public ResponseEntity<?> getDetectionReport(@PathVariable("resultId") Long resultId) {
@@ -402,7 +405,47 @@ public class DetectionController {
         }
     }
 
-    // 실제 이미지를 반환
+
+    // 백엔드 서버 -> 클라이언트 (썸네일 반환)
+    @GetMapping("record/{resultId}/thumbnail")
+    public ResponseEntity<?> getDetectionThumbnail(@PathVariable("resultId") Long resultId) {
+
+        try {
+            // 1. 서비스에서 파일 객체 가져오기 (검증 로직 포함됨)
+            File file = detectionService.getThumbnailFileByResultId(resultId);
+            Resource resource = new FileSystemResource(file);
+
+            // 2. Content-Type 결정 (기본 jpg 설정, 파일 probeContentType 사용)
+            MediaType mediaType = MediaType.IMAGE_JPEG;
+            try {
+                String contentType = Files.probeContentType(file.toPath());
+                if (contentType != null) {
+                    mediaType = MediaType.parseMediaType(contentType);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to determine content type for resultId {}, using default image/jpeg", resultId);
+            }
+
+            // 3. 응답 반환
+            return ResponseEntity.ok()
+                    .contentType(mediaType)
+                    .body(resource);
+
+        } catch (IllegalArgumentException e) {
+            // ID가 없거나 파일이 없는 경우 404
+            log.warn("Thumbnail not found for Result ID: {}", resultId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(e.getMessage());
+
+        } catch (Exception e) {
+            // 그 외 서버 에러 500
+            log.error("Error retrieving thumbnail for resultId: {}", resultId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+
+
+    // 백엔드 서버 -> 클라이언트 (리포트를 반환)
     @GetMapping("detection/report/image/{reportId}")
     public ResponseEntity<?> getReportImage(@PathVariable("reportId") Long reportId) {
         try {
@@ -428,16 +471,6 @@ public class DetectionController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
-
-
-
-
-
-
-
-
-
-
 
 
 
