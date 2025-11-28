@@ -176,7 +176,12 @@ class HybridXAIPipeline:
             import traceback
             logger.error(traceback.format_exc())
             return self._error_result("Feature Extraction Failed", str(e))
-            
+
+        # Post-process: Re-compute phoneme_labels_30fps using CENTER-BASED SELECTION
+        # This ensures cached data uses the correct algorithm even if cache was created
+        # with the old last-write-wins logic.
+        features = self._recompute_phoneme_labels_center_based(features)
+
         # STEP 2: MMMS-BA Prediction
         logger.info("STEP 2: MMMS-BA Prediction...")
         try:
@@ -376,6 +381,8 @@ class HybridXAIPipeline:
                     # [FIX] 의심 구간 한글 transcription 추출 (단어 레벨 필터링)
                     korean_transcription = None
                     whisper_result = features.get('whisper_result', {})
+
+                    # 1순위: best_interval (PIA 결과에서)
                     if 'best_interval' in pia_result:
                         interval = pia_result['best_interval']
                         korean_transcription = self._get_transcription_for_interval(
@@ -383,8 +390,17 @@ class HybridXAIPipeline:
                             interval.get('start'),
                             interval.get('end')
                         )
+                    # 2순위: suspicious_intervals의 첫 번째 구간
+                    elif suspicious_intervals and len(suspicious_intervals) > 0:
+                        first_interval = suspicious_intervals[0]
+                        korean_transcription = self._get_transcription_for_interval(
+                            whisper_result,
+                            first_interval.get('start'),
+                            first_interval.get('end')
+                        )
+                        logger.info(f"[Transcription] Using first suspicious interval: {first_interval.get('start'):.1f}s - {first_interval.get('end'):.1f}s")
+                    # 3순위: 전체 transcription
                     else:
-                        # Fallback: 전체 transcription
                         korean_transcription = self._get_transcription_for_interval(whisper_result)
 
                     pia_viz_path = self._visualize_pia_result(
@@ -436,6 +452,62 @@ class HybridXAIPipeline:
                 logger.warning(f"Failed to cleanup downloaded file: {e}")
 
         return result
+
+    def _recompute_phoneme_labels_center_based(self, features: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Re-compute phoneme_labels_30fps from phoneme_intervals using CENTER-BASED SELECTION.
+
+        This ensures cached data uses the correct algorithm even if the cache was created
+        with the old last-write-wins logic.
+
+        Args:
+            features: Feature dictionary with phoneme_intervals and timestamps_30fps
+
+        Returns:
+            Updated features with recomputed phoneme_labels_30fps
+        """
+        phoneme_intervals = features.get('phoneme_intervals', [])
+        timestamps_30fps = features.get('timestamps_30fps')
+
+        if timestamps_30fps is None or len(phoneme_intervals) == 0:
+            return features
+
+        # Pre-compute interval data with centers
+        interval_data = []
+        for ph_dict in phoneme_intervals:
+            start = float(ph_dict.get('start', 0.0))
+            end = float(ph_dict.get('end', 0.0))
+            phoneme = str(ph_dict.get('phoneme', ''))
+            center = (start + end) / 2.0
+            interval_data.append({
+                'start': start,
+                'end': end,
+                'phoneme': phoneme,
+                'center': center
+            })
+
+        # Re-compute labels using center-based selection
+        phoneme_labels_str = np.full(len(timestamps_30fps), '', dtype='<U10')
+
+        for idx, ts in enumerate(timestamps_30fps):
+            matching = []
+            for iv in interval_data:
+                if iv['start'] <= ts <= iv['end']:
+                    distance = abs(ts - iv['center'])
+                    matching.append((iv['phoneme'], distance))
+
+            if matching:
+                best_phoneme = min(matching, key=lambda x: x[1])[0]
+                phoneme_labels_str[idx] = best_phoneme
+
+        # Update features with recomputed labels
+        features['phoneme_labels_30fps'] = phoneme_labels_str
+
+        # Log unique phonemes for debugging
+        unique_phonemes = sorted(set(p for p in phoneme_labels_str if p))
+        logger.info(f"  [CENTER-BASED] Recomputed phoneme labels: {len(unique_phonemes)} unique phonemes")
+
+        return features
 
     def _error_result(self, error_title, error_msg):
         return {

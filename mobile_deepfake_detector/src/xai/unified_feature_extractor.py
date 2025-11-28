@@ -167,14 +167,37 @@ class UnifiedFeatureExtractor:
                         'end': end
                     })
 
-            # Generate string phoneme labels
+            # Generate string phoneme labels using CENTER-BASED SELECTION
+            # When multiple phoneme intervals overlap at a frame timestamp,
+            # select the phoneme whose center is closest to that timestamp.
             phoneme_labels_str = np.full(len(timestamps_30fps), '', dtype='<U10')
+
+            # Pre-compute interval centers
+            interval_data = []
             for ph_dict in phoneme_intervals:
                 start = float(ph_dict.get('start', 0.0))
                 end = float(ph_dict.get('end', 0.0))
                 phoneme = str(ph_dict.get('phoneme', ''))
-                mask = (timestamps_30fps >= start) & (timestamps_30fps <= end)
-                phoneme_labels_str[mask] = phoneme
+                center = (start + end) / 2.0
+                interval_data.append({
+                    'start': start,
+                    'end': end,
+                    'phoneme': phoneme,
+                    'center': center
+                })
+
+            # For each frame, find the phoneme with closest center
+            for idx, ts in enumerate(timestamps_30fps):
+                matching = []
+                for iv in interval_data:
+                    if iv['start'] <= ts <= iv['end']:
+                        distance = abs(ts - iv['center'])
+                        matching.append((iv['phoneme'], distance))
+
+                if matching:
+                    # Select phoneme with minimum distance to center
+                    best_phoneme = min(matching, key=lambda x: x[1])[0]
+                    phoneme_labels_str[idx] = best_phoneme
 
             # 4-3. ArcFace Extraction (GPU)
             t0 = time.time()

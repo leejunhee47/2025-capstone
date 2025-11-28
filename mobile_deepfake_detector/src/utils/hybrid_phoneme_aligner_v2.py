@@ -70,7 +70,9 @@ class HybridPhonemeAligner:
         self,
         whisper_model: str = "large-v2",
         device: str = "cuda",
-        compute_type: str = "float16"
+        compute_type: str = "float16",
+        vad_onset: float = 0.3,
+        vad_offset: float = 0.2
     ):
         """
         하이브리드 정렬기 초기화
@@ -79,11 +81,17 @@ class HybridPhonemeAligner:
             whisper_model: WhisperX 모델 크기
             device: 사용할 디바이스 (cuda/cpu)
             compute_type: WhisperX 계산 타입
+            vad_onset: VAD 음성 시작 감지 임계값 (낮을수록 민감, 기본 0.3)
+            vad_offset: VAD 음성 종료 감지 임계값 (낮을수록 민감, 기본 0.2)
         """
         self.device = device if torch.cuda.is_available() else "cpu"
         self.logger = logging.getLogger(__name__)
 
+        # VAD 파라미터 저장 (transcribe에서 사용)
+        self.vad_options = {"vad_onset": vad_onset, "vad_offset": vad_offset}
+
         self.logger.info(f"Initializing HybridPhonemeAligner on {self.device}")
+        self.logger.info(f"  VAD options: onset={vad_onset}, offset={vad_offset}")
 
         # 전사(transcription)를 위한 WhisperX 로드
         self.logger.info(f"Loading WhisperX model: {whisper_model}")
@@ -91,7 +99,8 @@ class HybridPhonemeAligner:
             whisper_model,
             self.device,
             compute_type=compute_type,
-            language="ko"
+            language="ko",
+            vad_options=self.vad_options
         )
 
         # 강제 정렬(forced alignment)을 위한 한국어 Wav2Vec2 모델 로드
@@ -488,7 +497,11 @@ class HybridPhonemeAligner:
         offset: float = 0.0
     ) -> np.ndarray:
         """
-        Match phoneme intervals to frame timestamps
+        Match phoneme intervals to frame timestamps using CENTER-BASED SELECTION.
+
+        When multiple phoneme intervals overlap at a frame timestamp,
+        select the phoneme whose center is closest to that timestamp.
+        This prevents arbitrary first-match selection that loses rare phonemes.
 
         Args:
             phoneme_intervals: List of (start, end) tuples (absolute time)
@@ -500,15 +513,28 @@ class HybridPhonemeAligner:
         """
         phoneme_labels = np.zeros(len(timestamps), dtype=np.int32)
 
+        # Pre-compute interval centers for efficiency
+        interval_centers = [
+            (phn_start + phn_end) / 2.0
+            for phn_start, phn_end in phoneme_intervals
+        ]
+
         for idx, rel_timestamp in enumerate(timestamps):
             # Convert relative timestamp to absolute time
             abs_timestamp = rel_timestamp + offset
 
-            # Find matching phoneme
+            # Collect ALL matching phonemes (not just first)
+            matching_phonemes = []
             for phoneme_idx, (phn_start, phn_end) in enumerate(phoneme_intervals):
                 if phn_start <= abs_timestamp <= phn_end:
-                    phoneme_labels[idx] = phoneme_idx
-                    break
+                    center = interval_centers[phoneme_idx]
+                    distance = abs(abs_timestamp - center)
+                    matching_phonemes.append((phoneme_idx, distance))
+
+            # Select phoneme with closest center
+            if matching_phonemes:
+                best_phoneme_idx = min(matching_phonemes, key=lambda x: x[1])[0]
+                phoneme_labels[idx] = best_phoneme_idx
 
         return phoneme_labels
 
@@ -664,20 +690,45 @@ class HybridPhonemeAligner:
                             self.logger.debug("No 'chars' key in word (chars are at segment level)")
 
                 # [FIX] Word timestamps를 original_segment에 저장 (시각화용)
+                # Time-ratio fallback: alignment 실패 시 세그먼트 텍스트를 시간 비율로 분할
                 if original_segment is not None and result.get('segments'):
                     aligned_seg = result['segments'][0]
-                    if 'words' in aligned_seg and aligned_seg['words']:
-                        # WhisperX는 segment 내 상대 시간 (0~segment_duration)을 반환
-                        # time_offset을 더해 절대 시간으로 변환
+                    aligned_words = aligned_seg.get('words', [])
+
+                    # 세그먼트 텍스트에서 실제 단어 수 계산
+                    text_words = segment_text.strip().split()
+                    expected_word_count = len(text_words)
+                    actual_aligned_count = len(aligned_words)
+
+                    # Case 1: 정상적으로 모든 단어가 정렬된 경우
+                    if aligned_words and actual_aligned_count >= expected_word_count * 0.8:
                         adjusted_words = []
-                        for w in aligned_seg['words']:
+                        for w in aligned_words:
                             adjusted_words.append({
                                 'word': w.get('word', ''),
                                 'start': round(w.get('start', 0) + time_offset, 3),
                                 'end': round(w.get('end', 0) + time_offset, 3)
                             })
                         original_segment['words'] = adjusted_words
-                        self.logger.debug(f"Stored {len(adjusted_words)} words in segment")
+                        self.logger.debug(f"[WORD_TS] Stored {len(adjusted_words)} aligned words (full alignment)")
+
+                    # Case 2: 일부만 정렬된 경우 → Time-ratio fallback
+                    else:
+                        self.logger.warning(
+                            f"[WORD_TS] Partial alignment: {actual_aligned_count}/{expected_word_count} words. "
+                            f"Applying Time-ratio fallback."
+                        )
+
+                        # Time-ratio fallback: 세그먼트 시간을 단어 수로 균등 분배
+                        fallback_words = self._generate_time_ratio_words(
+                            segment_text=segment_text,
+                            seg_start=time_offset,
+                            seg_end=time_offset + segment_duration,
+                            aligned_words=aligned_words,  # 부분 정렬 결과 활용
+                            time_offset=time_offset
+                        )
+                        original_segment['words'] = fallback_words
+                        self.logger.debug(f"[WORD_TS] Generated {len(fallback_words)} words via Time-ratio fallback")
 
                 # whisperx_aligner 로직을 사용하여 자모 레벨 타임스탬프 추출
                 jamo_intervals = self._extract_and_distribute_chars(result, time_offset)
@@ -926,6 +977,112 @@ class HybridPhonemeAligner:
         )
 
         return audio_path
+
+    def _generate_time_ratio_words(
+        self,
+        segment_text: str,
+        seg_start: float,
+        seg_end: float,
+        aligned_words: List[Dict],
+        time_offset: float
+    ) -> List[Dict]:
+        """
+        Time-ratio fallback: 세그먼트 시간을 단어 수에 비례하여 분배
+
+        WhisperX word alignment이 부분적으로 실패했을 때 사용합니다.
+        부분 정렬 결과가 있으면 해당 단어는 유지하고, 나머지 시간을
+        미정렬 단어들에게 균등 분배합니다.
+
+        Args:
+            segment_text: 세그먼트의 전체 텍스트
+            seg_start: 세그먼트 시작 시간 (절대 시간)
+            seg_end: 세그먼트 종료 시간 (절대 시간)
+            aligned_words: WhisperX에서 부분적으로 정렬된 단어들
+            time_offset: 타임스탬프 오프셋 (이미 적용된 경우 0)
+
+        Returns:
+            모든 단어에 대한 시간 정보가 포함된 리스트
+        """
+        # 텍스트에서 단어 분리
+        text_words = segment_text.strip().split()
+        if not text_words:
+            return []
+
+        segment_duration = seg_end - seg_start
+        result_words = []
+
+        # Case 1: 부분 정렬 결과가 있는 경우 → 하이브리드 방식
+        if aligned_words:
+            # 정렬된 단어들의 텍스트와 시간 매핑
+            aligned_word_texts = set()
+            aligned_word_map = {}
+
+            for aw in aligned_words:
+                word_text = aw.get('word', '').strip()
+                if word_text and 'start' in aw and 'end' in aw:
+                    aligned_word_texts.add(word_text)
+                    # WhisperX align 결과는 세그먼트 내부 상대 시간 (0부터 시작)
+                    # time_offset을 더해서 절대 시간으로 변환
+                    aligned_word_map[word_text] = {
+                        'word': word_text,
+                        'start': round(aw['start'] + time_offset, 3),
+                        'end': round(aw['end'] + time_offset, 3)
+                    }
+
+            # 정렬된 단어가 차지하는 시간 계산
+            used_time = sum(
+                aw['end'] - aw['start']
+                for aw in aligned_word_map.values()
+            )
+
+            # 미정렬 단어 수
+            unaligned_words = [w for w in text_words if w not in aligned_word_texts]
+            unaligned_count = len(unaligned_words)
+
+            # 남은 시간을 미정렬 단어에 분배
+            if unaligned_count > 0:
+                remaining_time = max(0.1, segment_duration - used_time)
+                time_per_unaligned = remaining_time / unaligned_count
+            else:
+                time_per_unaligned = 0
+
+            # 결과 생성: 순서대로 단어 배치
+            current_time = seg_start
+            for word in text_words:
+                if word in aligned_word_map:
+                    # 정렬된 단어: 원래 시간 사용
+                    result_words.append(aligned_word_map[word])
+                    current_time = aligned_word_map[word]['end']
+                else:
+                    # 미정렬 단어: 균등 분배
+                    word_start = current_time
+                    word_end = current_time + time_per_unaligned
+                    result_words.append({
+                        'word': word,
+                        'start': round(word_start, 3),
+                        'end': round(word_end, 3)
+                    })
+                    current_time = word_end
+
+        # Case 2: 정렬 결과가 전혀 없는 경우 → 완전 균등 분배
+        else:
+            time_per_word = segment_duration / len(text_words)
+
+            for i, word in enumerate(text_words):
+                word_start = seg_start + i * time_per_word
+                word_end = seg_start + (i + 1) * time_per_word
+                result_words.append({
+                    'word': word,
+                    'start': round(word_start, 3),
+                    'end': round(word_end, 3)
+                })
+
+        self.logger.debug(
+            f"[TIME_RATIO] Generated {len(result_words)} words "
+            f"(aligned: {len(aligned_words)}, total: {len(text_words)})"
+        )
+
+        return result_words
 
     def _empty_result(self) -> Dict:
         """빈 결과 구조 반환"""
