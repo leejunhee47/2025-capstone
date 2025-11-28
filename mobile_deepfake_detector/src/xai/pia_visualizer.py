@@ -349,14 +349,33 @@ class PIAVisualizer:
         mean_mar = geom_analysis['mean_mar']
         std_mar = geom_analysis['std_mar']
         abnormal_phonemes = geom_analysis.get('abnormal_phonemes', [])
-        
+        baseline_info = geom_analysis.get('baseline_info', {})
+
+        # [NEW] In-video baseline 체크
+        use_in_video = baseline_info.get('type') == 'in_video' if baseline_info else False
+
+        if use_in_video:
+            # In-video baseline: 영상 자체의 mean/std 사용
+            print(f"[VISUALIZER] Using in-video baseline (mean={mean_mar:.3f}, std={std_mar:.3f})")
+            phoneme_baseline = {}  # 개별 음소 baseline 사용 안함
+        else:
+            # [ORIGINAL] 음소별 global baseline 로드
+            baseline_path = Path(__file__).parent.parent.parent / 'mar_baseline_pia_real_fixed.json'
+            phoneme_baseline = {}
+            try:
+                with open(baseline_path, 'r', encoding='utf-8') as f:
+                    baseline_data = json.load(f)
+                    phoneme_baseline = baseline_data.get('phoneme_stats', {})
+            except Exception as e:
+                print(f"[WARNING] Failed to load baseline: {e}")
+
         # 모든 phoneme에 대한 정보 수집 (abnormal + normal)
         # phoneme_vocab에서 모든 phoneme 가져오기
         phoneme_vocab = get_phoneme_vocab()
-        
+
         # abnormal_phonemes를 딕셔너리로 변환 (빠른 조회용)
         abnormal_dict = {p['phoneme_mfa']: p for p in abnormal_phonemes}
-        
+
         # 시각화용 데이터 준비
         phoneme_names = []
         measured_mar_values = []
@@ -365,11 +384,25 @@ class PIAVisualizer:
         expected_mean_values = []
         colors = []
         z_scores = []
-        
+
         for phoneme_mfa in phoneme_vocab:
             phoneme_kr = phoneme_to_korean(phoneme_mfa)
             phoneme_names.append(phoneme_kr)
-            
+
+            # [FIX] baseline 계산 (in-video vs global)
+            if use_in_video:
+                # In-video baseline: 영상 평균 ± 2 표준편차
+                baseline_mean = mean_mar
+                effective_std = std_mar if std_mar > 0.01 else 0.1
+                baseline_p10 = max(0, mean_mar - 2 * effective_std)
+                baseline_p90 = mean_mar + 2 * effective_std
+            else:
+                # Global baseline: 음소별 기대값
+                baseline_stats = phoneme_baseline.get(phoneme_mfa, {})
+                baseline_mean = baseline_stats.get('mean', mean_mar)
+                baseline_p10 = baseline_stats.get('p10', baseline_mean - 0.1)
+                baseline_p90 = baseline_stats.get('p90', baseline_mean + 0.1)
+
             if phoneme_mfa in abnormal_dict:
                 # 이상 phoneme
                 abnormal = abnormal_dict[phoneme_mfa]
@@ -379,7 +412,7 @@ class PIAVisualizer:
                 expected_mean_values.append(abnormal['expected_mean'])
                 z_score = abs(abnormal.get('z_score', 0))
                 z_scores.append(z_score)
-                
+
                 # Z-score에 따라 색상 결정
                 if z_score > 3:
                     colors.append('#d32f2f')  # 진한 빨강 (critical)
@@ -388,11 +421,11 @@ class PIAVisualizer:
                 else:
                     colors.append('#fbc02d')  # 노랑 (medium)
             else:
-                # 정상 phoneme
-                measured_mar_values.append(None)
-                expected_min_values.append(None)
-                expected_max_values.append(None)
-                expected_mean_values.append(None)
+                # 정상 phoneme - baseline 사용
+                measured_mar_values.append(baseline_mean)  # baseline 평균으로 표시
+                expected_min_values.append(baseline_p10)
+                expected_max_values.append(baseline_p90)
+                expected_mean_values.append(baseline_mean)
                 z_scores.append(0)
                 colors.append('#4caf50')  # 녹색 (정상)
         
@@ -412,10 +445,10 @@ class PIAVisualizer:
                 ax.plot([i-width/2, i+width/2], [mean_val, mean_val],
                        color='blue', linestyle='--', linewidth=1.5, alpha=0.6, zorder=2)
         
-        # 측정값 막대 (abnormal만 표시, 정상은 회색으로 표시)
-        for i, (name, measured, color) in enumerate(zip(phoneme_names, measured_mar_values, colors)):
-            if measured is not None:
-                # 이상 phoneme
+        # 측정값 막대
+        for i, (name, measured, color, z_score) in enumerate(zip(phoneme_names, measured_mar_values, colors, z_scores)):
+            if z_score > 0:
+                # 이상 phoneme - 측정값 막대 (색상으로 심각도 표시)
                 ax.bar(
                     i, measured, width,
                     color=color, alpha=0.7,
@@ -423,10 +456,9 @@ class PIAVisualizer:
                     zorder=3
                 )
             else:
-                # 정상 phoneme (작은 회색 막대로 표시)
-                # 전체 평균값으로 표시
+                # 정상 phoneme - baseline 평균으로 작은 녹색 막대 표시
                 ax.bar(
-                    i, mean_mar, width * 0.5,
+                    i, measured, width * 0.5,
                     color='#4caf50', alpha=0.4,
                     edgecolor='gray', linewidth=0.5,
                     zorder=2

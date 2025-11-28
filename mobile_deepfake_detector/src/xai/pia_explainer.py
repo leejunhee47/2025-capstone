@@ -497,9 +497,13 @@ class PIAExplainer:
             'interval_probabilities': interval_probs
         }
 
-    def _analyze_geometry(self) -> Dict[str, Any]:
+    def _analyze_geometry(self, use_in_video_baseline: bool = True) -> Dict[str, Any]:
         """
         Analyze geometry (MAR) features using statistical baseline.
+
+        Args:
+            use_in_video_baseline: If True, use in-video statistics instead of global baseline.
+                                   This avoids false positives from individual speaking styles.
 
         Returns:
             Dictionary with:
@@ -508,20 +512,45 @@ class PIAExplainer:
             - abnormal_phonemes: List of phonemes with unusual MAR
             - baseline_info: Baseline collection metadata
         """
-        # Load statistical baseline from Real videos (525 videos, 156k frames)
-        baseline_path = Path(__file__).parent.parent.parent / 'mar_baseline_pia_real_fixed.json'
+        # Extract MAR values first: (1, P, F, 1) → (P, F)
+        geoms = self.input_data['geoms']  # (1, P, F, 1)
+        mar_values = geoms[0, :, :, 0].cpu().numpy()  # (P, F)
 
-        try:
-            with open(baseline_path, 'r', encoding='utf-8') as f:
-                baseline = json.load(f)
-            phoneme_stats = baseline['phoneme_stats']
-            baseline_info = baseline['collection_info']
-            print(f"\n[MAR BASELINE] Loaded from {baseline_info['num_videos']} Real videos")
-        except Exception as e:
-            print(f"\n[MAR BASELINE ERROR] Failed to load baseline: {e}")
-            print(f"  Using fallback: uniform range [0.15, 0.45]")
+        # Compute in-video statistics (exclude padding - 0 values)
+        mar_nonzero = mar_values[mar_values != 0]
+        if len(mar_nonzero) > 0:
+            video_mean_mar = float(mar_nonzero.mean())
+            video_std_mar = float(mar_nonzero.std())
+        else:
+            video_mean_mar = 0.3
+            video_std_mar = 0.1
+
+        if use_in_video_baseline:
+            # [NEW] In-video baseline: 개인차 무시, 영상 내 일관성만 확인
+            print(f"\n[MAR IN-VIDEO BASELINE] Using video's own statistics")
+            print(f"  Video MAR: mean={video_mean_mar:.3f}, std={video_std_mar:.3f}")
             phoneme_stats = None
-            baseline_info = None
+            baseline_info = {
+                'type': 'in_video',
+                'video_mean': video_mean_mar,
+                'video_std': video_std_mar,
+                'description': 'Comparing within video (no cross-video baseline)'
+            }
+        else:
+            # [ORIGINAL] Global baseline from 525 Real videos
+            baseline_path = Path(__file__).parent.parent.parent / 'mar_baseline_pia_real_fixed.json'
+            try:
+                with open(baseline_path, 'r', encoding='utf-8') as f:
+                    baseline = json.load(f)
+                phoneme_stats = baseline['phoneme_stats']
+                baseline_info = baseline['collection_info']
+                baseline_info['type'] = 'global'
+                print(f"\n[MAR BASELINE] Loaded from {baseline_info['num_videos']} Real videos")
+            except Exception as e:
+                print(f"\n[MAR BASELINE ERROR] Failed to load baseline: {e}")
+                print(f"  Using fallback: uniform range [0.15, 0.45]")
+                phoneme_stats = None
+                baseline_info = None
 
         # MFA → 한글 매핑
         phoneme_to_korean = {
@@ -531,62 +560,83 @@ class PIAExplainer:
             'iO': 'ㅛ', 'iU': 'ㅠ'
         }
 
-        # Extract MAR values: (1, P, F, 1) → (P, F)
-        geoms = self.input_data['geoms']  # (1, P, F, 1)
-        mar_values = geoms[0, :, :, 0].cpu().numpy()  # (P, F)
-
-        # Compute statistics (exclude padding - 0 values)
-        mar_nonzero = mar_values[mar_values != 0]
-        if len(mar_nonzero) > 0:
-            mean_mar = float(mar_nonzero.mean())
-            std_mar = float(mar_nonzero.std())
-        else:
-            mean_mar = 0.0
-            std_mar = 0.0
-
-        # Find abnormal phonemes using statistical baseline
+        # Find abnormal phonemes
         abnormal_phonemes = []
         P_actual = mar_values.shape[0]
+
+        # Collect per-phoneme MAR values for in-video baseline
+        phoneme_mar_values = {}
+        for pi, phoneme in enumerate(self.phoneme_vocab):
+            if pi >= P_actual:
+                break
+            phoneme_frames = mar_values[pi]
+            phoneme_frames_nonzero = phoneme_frames[phoneme_frames != 0]
+            if len(phoneme_frames_nonzero) > 0:
+                phoneme_mar_values[phoneme] = float(phoneme_frames_nonzero.mean())
 
         for pi, phoneme in enumerate(self.phoneme_vocab):
             if pi >= P_actual:
                 break
 
-            # Average MAR across F frames for this phoneme (exclude padding - 0 values)
-            phoneme_frames = mar_values[pi]
-            phoneme_frames_nonzero = phoneme_frames[phoneme_frames != 0]
-
-            # Skip if all frames are padding
-            if len(phoneme_frames_nonzero) == 0:
+            if phoneme not in phoneme_mar_values:
                 continue
 
-            phoneme_mar = float(phoneme_frames_nonzero.mean())
+            phoneme_mar = phoneme_mar_values[phoneme]
 
-            if phoneme_stats and phoneme in phoneme_stats:
+            if use_in_video_baseline:
+                # [NEW] In-video baseline: 영상 내 평균/표준편차 기준으로 이상치 탐지
+                expected_mean = video_mean_mar
+                expected_std = video_std_mar if video_std_mar > 0.01 else 0.1
+                expected_min = expected_mean - 2 * expected_std
+                expected_max = expected_mean + 2 * expected_std
+
+                # Z-score 계산 (영상 내 기준)
+                z_score = (phoneme_mar - expected_mean) / expected_std
+
+                # 2 표준편차 이상 벗어나면 이상 (영상 내에서 급격한 변화)
+                if abs(z_score) > 2:
+                    if abs(z_score) > 3:
+                        severity = "high"
+                    else:
+                        severity = "medium"
+
+                    deviation = float(phoneme_mar - expected_mean)
+                    deviation_percent = abs(deviation / expected_mean * 100) if expected_mean > 0 else 0
+
+                    abnormal_phonemes.append({
+                        'phoneme': phoneme_to_korean.get(phoneme, phoneme),
+                        'phoneme_mfa': phoneme,
+                        'measured_mar': float(phoneme_mar),
+                        'expected_mean': expected_mean,
+                        'expected_range': [max(0, expected_min), expected_max],
+                        'deviation': deviation,
+                        'deviation_percent': deviation_percent,
+                        'z_score': float(z_score),
+                        'severity': severity,
+                        'explanation': f"'{phoneme_to_korean.get(phoneme, phoneme)}' 음소가 영상 내 평균({expected_mean:.3f})에서 크게 벗어남 (Z={z_score:.2f})"
+                    })
+
+            elif phoneme_stats and phoneme in phoneme_stats:
+                # [ORIGINAL] Global baseline
                 stats = phoneme_stats[phoneme]
-
-                # Use P10-P90 as expected range (80% of Real video distribution)
                 expected_min = stats['p10']
                 expected_max = stats['p90']
                 expected_mean = stats['mean']
                 expected_std = stats['std']
 
-                # Calculate Z-score (how many std devs from mean)
                 z_score = (phoneme_mar - expected_mean) / expected_std if expected_std > 0 else 0
 
-                # Check if outside P10-P90 range (abnormal)
                 if not (expected_min <= phoneme_mar <= expected_max):
-                    # Determine severity
                     if abs(z_score) > 3:
-                        severity = "high"  # >3 std devs
+                        severity = "high"
                     elif abs(z_score) > 2:
-                        severity = "medium"  # >2 std devs
+                        severity = "medium"
                     else:
-                        severity = "low"  # within 2 std devs
+                        severity = "low"
 
                     deviation = float(phoneme_mar - expected_mean)
                     deviation_percent = abs(deviation / expected_mean * 100) if expected_mean > 0 else 0
-                    
+
                     abnormal_phonemes.append({
                         'phoneme': phoneme_to_korean.get(phoneme, phoneme),
                         'phoneme_mfa': phoneme,
@@ -601,37 +651,14 @@ class PIAExplainer:
                             phoneme, phoneme_mar, expected_mean, expected_min, expected_max, z_score
                         )
                     })
-            else:
-                # Fallback: use simple range check if baseline not available
-                expected_min, expected_max = 0.15, 0.45
-                expected_mean_fallback = 0.30
-                if not (expected_min <= phoneme_mar <= expected_max):
-                    deviation = float(phoneme_mar - expected_mean_fallback)
-                    deviation_percent = abs(deviation / expected_mean_fallback * 100) if expected_mean_fallback > 0 else 0
-                    
-                    abnormal_phonemes.append({
-                        'phoneme': phoneme_to_korean.get(phoneme, phoneme),
-                        'phoneme_mfa': phoneme,
-                        'measured_mar': float(phoneme_mar),
-                        'expected_mean': expected_mean_fallback,
-                        'expected_range': [expected_min, expected_max],
-                        'deviation': deviation,
-                        'deviation_percent': deviation_percent,
-                        'z_score': 0.0,
-                        'severity': 'unknown',
-                        'explanation': f'Baseline 없음 (측정값: {phoneme_mar:.3f})'
-                    })
 
         return {
-            'mean_mar': mean_mar,
-            'std_mar': std_mar,
+            'mean_mar': video_mean_mar,
+            'std_mar': video_std_mar,
             'abnormal_phonemes': abnormal_phonemes,
             'num_abnormal': len(abnormal_phonemes),
-            'baseline_info': {
-                'num_videos': baseline_info['num_videos'] if baseline_info else 0,
-                'total_frames': baseline_info['total_frames'] if baseline_info else 0,
-                'mar_version': baseline_info['mar_version'] if baseline_info else 'unknown'
-            } if baseline_info else None
+            'baseline_info': baseline_info,
+            'phoneme_mar_values': phoneme_mar_values  # 음소별 실제 MAR 값 추가
         }
 
     def _generate_mar_explanation(
@@ -827,6 +854,7 @@ class PIAExplainer:
             },
             'detection': {
                 'is_fake': is_fake,
+                'verdict': 'fake' if is_fake else 'real',  # plot_detection_summary() 호환
                 'confidence': confidence,
                 'prediction_label': 'FAKE' if is_fake else 'REAL',
                 'probabilities': {

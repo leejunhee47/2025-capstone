@@ -122,7 +122,7 @@ def extract_lip_region(frame, face_cascade=None):
     return center_region
 
 
-def extract_lip_features(video_path, max_frames=100, target_size=(96, 96)):
+def extract_lip_features(video_path, max_frames=100, target_size=(112, 112)):
     """Extract lip region features from video"""
     cap = cv2.VideoCapture(video_path)
     lip_frames = []

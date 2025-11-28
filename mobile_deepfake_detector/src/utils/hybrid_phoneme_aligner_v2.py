@@ -396,11 +396,13 @@ class HybridPhonemeAligner:
                 self.logger.info(f"    Phonemes ({len(phonemes)}): {''.join(phonemes[:20])}...")
 
                 # 단계 2: 이 세그먼트에 PIA 스타일 정렬 적용
+                # [FIX] segment dict를 전달하여 word timestamps 저장
                 phoneme_intervals = self._align_segment_pia_style(
                     segment_audio,
                     phonemes,
                     seg_start,  # 이 세그먼트의 시간 오프셋 (absolute time)
-                    segment_text
+                    segment_text,
+                    original_segment=segment  # word timestamps 저장용
                 )
 
                 if phoneme_intervals:
@@ -569,7 +571,8 @@ class HybridPhonemeAligner:
         audio_segment: np.ndarray,
         phonemes: List[str],
         time_offset: float,
-        segment_text: str
+        segment_text: str,
+        original_segment: Optional[Dict] = None
     ) -> List[Tuple[float, float]]:
         """
         PIA 스타일 3단계 정렬:
@@ -582,6 +585,7 @@ class HybridPhonemeAligner:
             phonemes: 정렬할 MFA 음소 리스트
             time_offset: 전체 오디오에서 세그먼트의 시작 시간
             segment_text: 이 세그먼트의 원본 한국어 텍스트
+            original_segment: 원본 segment dict (word timestamps 저장용)
 
         Returns:
             각 음소의 (start, end) 튜플 리스트
@@ -658,6 +662,22 @@ class HybridPhonemeAligner:
                                 self.logger.debug(f"First char: {word['chars'][0]}")
                         else:
                             self.logger.debug("No 'chars' key in word (chars are at segment level)")
+
+                # [FIX] Word timestamps를 original_segment에 저장 (시각화용)
+                if original_segment is not None and result.get('segments'):
+                    aligned_seg = result['segments'][0]
+                    if 'words' in aligned_seg and aligned_seg['words']:
+                        # WhisperX는 segment 내 상대 시간 (0~segment_duration)을 반환
+                        # time_offset을 더해 절대 시간으로 변환
+                        adjusted_words = []
+                        for w in aligned_seg['words']:
+                            adjusted_words.append({
+                                'word': w.get('word', ''),
+                                'start': round(w.get('start', 0) + time_offset, 3),
+                                'end': round(w.get('end', 0) + time_offset, 3)
+                            })
+                        original_segment['words'] = adjusted_words
+                        self.logger.debug(f"Stored {len(adjusted_words)} words in segment")
 
                 # whisperx_aligner 로직을 사용하여 자모 레벨 타임스탬프 추출
                 jamo_intervals = self._extract_and_distribute_chars(result, time_offset)

@@ -1,8 +1,6 @@
-import numpy as np
 import uuid
 from datetime import datetime
-from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any
 import logging
 
 # Setup logger
@@ -24,7 +22,7 @@ class ResultAggregator:
         self,
         mmms_result: Dict[str, Any],
         pia_result: Dict[str, Any],
-        weights: Dict[str, float] = {'mmms': 0.4, 'pia': 0.6}
+        weights: Dict[str, float] = {'mmms': 0.7, 'pia': 0.3}
     ) -> Dict[str, Any]:
         """
         Ensemble MMMS-BA and PIA results.
@@ -58,30 +56,36 @@ class ResultAggregator:
         # [NEW] Conservative Ensemble Logic: If any model is highly confident (>0.9) about FAKE,
         # prioritize that signal. This prevents one model's failure from masking a strong detection.
         STRONG_THRESHOLD = 0.90
-        
+
         if mmms_prob > STRONG_THRESHOLD:
             logger.info(f"Strong FAKE signal from MMMS-BA ({mmms_prob:.4f}). Prioritizing MMMS-BA.")
-            final_prob = mmms_prob # Trust the strong fake signal
-            # Adjust weights for details only
+            final_prob = mmms_prob
             w_mmms, w_pia = 1.0, 0.0
-            
+
         elif pia_prob > STRONG_THRESHOLD:
             logger.info(f"Strong FAKE signal from PIA ({pia_prob:.4f}). Prioritizing PIA.")
             final_prob = pia_prob
             w_mmms, w_pia = 0.0, 1.0
-            
+
         else:
             # Standard weighted average for ambiguous cases
             total_w = w_mmms + w_pia
             if total_w > 0:
                 w_mmms /= total_w
                 w_pia /= total_w
-            
+
             final_prob = w_mmms * mmms_prob + w_pia * pia_prob
         
         verdict = 'fake' if final_prob > 0.5 else 'real'
         confidence = final_prob if verdict == 'fake' else 1.0 - final_prob
-        
+
+        # 개별 모델 판정 및 신뢰도 계산
+        mmms_verdict = 'fake' if mmms_prob > 0.5 else 'real'
+        mmms_confidence = mmms_prob if mmms_verdict == 'fake' else 1.0 - mmms_prob
+
+        pia_verdict = 'fake' if pia_prob > 0.5 else 'real'
+        pia_confidence = pia_prob if pia_verdict == 'fake' else 1.0 - pia_prob
+
         return {
             'verdict': verdict,
             'confidence': float(confidence),
@@ -90,8 +94,15 @@ class ResultAggregator:
                 'fake': float(final_prob)
             },
             'details': {
-                'mmms_prob': float(mmms_prob),
-                'pia_prob': float(pia_prob),
+                # MMMS-BA 개별 결과
+                'mmms_verdict': mmms_verdict,
+                'mmms_confidence': float(mmms_confidence),
+                'mmms_fake_prob': float(mmms_prob),
+                # PIA 개별 결과
+                'pia_verdict': pia_verdict,
+                'pia_confidence': float(pia_confidence),
+                'pia_fake_prob': float(pia_prob),
+                # 앙상블 가중치
                 'weights': {'mmms': w_mmms, 'pia': w_pia}
             }
         }
@@ -276,7 +287,7 @@ class ResultAggregator:
 
             return " ".join(parts)
         else:
-            return f"MMMS-BA와 PIA 모델 모두 정상 범주 내의 패턴을 보였습니다. (MMMS: {details['mmms_prob']:.2f}, PIA: {details['pia_prob']:.2f})"
+            return f"MMMS-BA와 PIA 모델 모두 정상 범주 내의 패턴을 보였습니다. (MMMS: {details['mmms_fake_prob']:.2f}, PIA: {details['pia_fake_prob']:.2f})"
 
     def _build_detail_view(self, detection: Dict, pia_result: Dict, video_info: Dict) -> Dict:
         """Build mobile app view data"""
@@ -349,10 +360,18 @@ class ResultAggregator:
                         
         return {
             'key_findings': key_findings,
-            'confidence_breakdown': {
-                'mmms_confidence': detection['details']['mmms_prob'],
-                'pia_confidence': detection['details']['pia_prob'],
-                'combined_confidence': detection['confidence']
+            'model_results': {
+                # MMMS-BA 개별 결과
+                'mmms_verdict': detection['details']['mmms_verdict'],
+                'mmms_confidence': detection['details']['mmms_confidence'],
+                'mmms_fake_prob': detection['details']['mmms_fake_prob'],
+                # PIA 개별 결과
+                'pia_verdict': detection['details']['pia_verdict'],
+                'pia_confidence': detection['details']['pia_confidence'],
+                'pia_fake_prob': detection['details']['pia_fake_prob'],
+                # 앙상블 결과
+                'ensemble_verdict': detection['verdict'],
+                'ensemble_confidence': detection['confidence']
             },
             'video_info': video_info or {}
         }
@@ -379,86 +398,26 @@ class ResultAggregator:
         self,
         video_path: str,
         video_id: str,
-        output_dir: str,
         detection: Dict[str, Any],
         summary: Dict[str, Any],
         video_info: Dict[str, Any],
-        processing_time_ms: float,
-        mmms_result: Dict[str, Any],
-        pia_result: Dict[str, Any],
-        thumbnail_path: Optional[str] = None,
-        stage1_timeline_path: Optional[str] = None,
-        pia_xai_path: Optional[str] = None,
-        interval_xai_paths: Optional[List[str]] = None,
-        suspicious_intervals: Optional[List[Dict]] = None
+        processing_time_ms: float
     ) -> Dict[str, Any]:
         """
-        최종 결과를 구성하고 시각화 파일 경로를 포함합니다.
+        최종 결과를 구성합니다 (간소화 버전).
 
         Args:
             video_path: 비디오 파일 경로
             video_id: 비디오 ID
-            output_dir: 출력 디렉토리
             detection: 탐지 결과
             summary: 한국어 요약
             video_info: 비디오 정보
             processing_time_ms: 처리 시간 (밀리초)
-            mmms_result: MMMS-BA 결과
-            pia_result: PIA 결과
-            thumbnail_path: 썸네일 경로 (선택)
-            stage1_timeline_path: Stage1 timeline 시각화 경로 (선택)
-            pia_xai_path: PIA XAI 시각화 경로 (선택)
-            interval_xai_paths: Interval별 XAI 시각화 경로 리스트 (선택)
-            suspicious_intervals: MMMS-BA가 탐지한 의심 구간 리스트 (선택)
 
         Returns:
-            최종 결과 딕셔너리
+            최종 결과 딕셔너리 (4개 필드: metadata, video_info, detection, summary)
         """
         request_id = f"req_{uuid.uuid4().hex[:8]}"
-
-        # 시각화 파일 경로 구성
-        outputs = {}
-        if stage1_timeline_path:
-            outputs['stage1_timeline'] = stage1_timeline_path
-        if interval_xai_paths:
-            outputs['stage2_intervals'] = interval_xai_paths
-        if pia_xai_path:
-            outputs['pia_xai'] = pia_xai_path
-        outputs['combined_json'] = str(Path(output_dir) / "result.json")
-
-        # [FIX] Sanitize MMMS result - remove large frame_probs array
-        mmms_sanitized = {
-            'verdict': mmms_result.get('verdict', 'unknown'),
-            'confidence': mmms_result.get('confidence', 0.0),
-            'probabilities': mmms_result.get('probabilities', {}),
-            'mean_fake_prob': mmms_result.get('mean_fake_prob', 0.0)
-        }
-
-        # [FIX] Sanitize PIA result - keep only essential fields
-        pia_sanitized = {
-            'verdict': pia_result.get('verdict', 'unknown'),
-            'confidence': pia_result.get('confidence', 0.0),
-            'probabilities': pia_result.get('probabilities', {}),
-        }
-        # Add best_interval if available
-        if 'best_interval' in pia_result:
-            pia_sanitized['best_interval'] = pia_result['best_interval']
-        if 'matched_phonemes' in pia_result:
-            pia_sanitized['matched_phonemes'] = pia_result['matched_phonemes']
-        if 'all_phonemes' in pia_result:
-            pia_sanitized['all_phonemes'] = pia_result['all_phonemes']
-        if 'num_intervals_analyzed' in pia_result:
-            pia_sanitized['num_intervals_analyzed'] = pia_result['num_intervals_analyzed']
-
-        # [NEW] Build stage1_timeline section (interface-compliant)
-        stage1_timeline = self._build_stage1_timeline(
-            mmms_result,
-            suspicious_intervals or [],
-            video_info
-        )
-
-        # [NEW] Build stage2_interval_analysis section
-        stage2_analysis = self._build_stage2_analysis(pia_result)
 
         return {
             'metadata': {
@@ -470,116 +429,5 @@ class ResultAggregator:
             },
             'video_info': video_info,
             'detection': detection,
-            'summary': summary,
-            'stage1_timeline': stage1_timeline,
-            'stage2_interval_analysis': stage2_analysis,
-            'raw_results': {
-                'mmms_ba': mmms_sanitized,
-                'pia': pia_sanitized
-            },
-            'thumbnails': {'detection_card': thumbnail_path} if thumbnail_path else {},
-            'outputs': outputs
+            'summary': summary
         }
-
-    def _build_stage1_timeline(
-        self,
-        mmms_result: Dict[str, Any],
-        suspicious_intervals: List[Dict],
-        video_info: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Build stage1_timeline section matching hybrid_xai_interface.ts.
-
-        Note: frame_probabilities array is NOT included to keep JSON size small.
-        Use the stage1_timeline.png visualization instead.
-        """
-        frame_probs = mmms_result.get('frame_probs', [])
-
-        # Calculate statistics
-        if len(frame_probs) > 0:
-            probs_array = np.array(frame_probs)
-            statistics = {
-                'mean_fake_prob': float(np.mean(probs_array)),
-                'std_fake_prob': float(np.std(probs_array)),
-                'max_fake_prob': float(np.max(probs_array)),
-                'min_fake_prob': float(np.min(probs_array)),
-                'threshold_used': 0.6,
-                'total_frames': len(frame_probs),
-                'suspicious_frame_count': int(np.sum(probs_array > 0.6)),
-                'suspicious_frame_ratio': float(np.mean(probs_array > 0.6) * 100)
-            }
-        else:
-            statistics = {
-                'mean_fake_prob': 0.0,
-                'std_fake_prob': 0.0,
-                'max_fake_prob': 0.0,
-                'min_fake_prob': 0.0,
-                'threshold_used': 0.6,
-                'total_frames': 0,
-                'suspicious_frame_count': 0,
-                'suspicious_frame_ratio': 0.0
-            }
-
-        return {
-            'suspicious_intervals': suspicious_intervals,
-            'statistics': statistics
-            # Note: frame_probabilities array omitted for JSON size
-        }
-
-    def _build_stage2_analysis(self, pia_result: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Build stage2_interval_analysis section from PIA result.
-
-        Extracts XAI information if available (geometry_analysis, phoneme_analysis, etc.)
-        """
-        analysis_list = []
-
-        # Check if we have interval results
-        all_intervals = pia_result.get('all_intervals', [])
-
-        if len(all_intervals) == 0:
-            # Single full-video analysis
-            interval_analysis = {
-                'interval_id': 0,
-                'time_range': 'full_video',
-                'prediction': {
-                    'verdict': pia_result.get('verdict', 'unknown'),
-                    'confidence': pia_result.get('confidence', 0.0),
-                    'probabilities': pia_result.get('probabilities', {})
-                }
-            }
-
-            # Add XAI info if available (from PIAExplainer.explain())
-            if 'geometry_analysis' in pia_result:
-                interval_analysis['geometry_analysis'] = pia_result['geometry_analysis']
-            if 'phoneme_analysis' in pia_result:
-                interval_analysis['phoneme_analysis'] = pia_result['phoneme_analysis']
-            if 'model_info' in pia_result and 'branch_contributions' in pia_result.get('model_info', {}):
-                interval_analysis['branch_contributions'] = pia_result['model_info']['branch_contributions']
-
-            analysis_list.append(interval_analysis)
-        else:
-            # Multiple interval analyses
-            for idx, interval_result in enumerate(all_intervals):
-                interval_info = interval_result.get('interval', {})
-                interval_analysis = {
-                    'interval_id': idx,
-                    'time_range': f"{interval_info.get('start', 0):.1f}s-{interval_info.get('end', 0):.1f}s",
-                    'prediction': {
-                        'verdict': interval_result.get('verdict', 'unknown'),
-                        'confidence': interval_result.get('confidence', 0.0),
-                        'probabilities': interval_result.get('probabilities', {})
-                    }
-                }
-
-                # Add XAI info if available
-                if 'geometry_analysis' in interval_result:
-                    interval_analysis['geometry_analysis'] = interval_result['geometry_analysis']
-                if 'phoneme_analysis' in interval_result:
-                    interval_analysis['phoneme_analysis'] = interval_result['phoneme_analysis']
-                if 'model_info' in interval_result and 'branch_contributions' in interval_result.get('model_info', {}):
-                    interval_analysis['branch_contributions'] = interval_result['model_info']['branch_contributions']
-
-                analysis_list.append(interval_analysis)
-
-        return analysis_list

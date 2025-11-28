@@ -21,42 +21,46 @@ Korean MFA Phoneme Format:
 # Selected based on:
 #   1. Visual salience (easily visible lip/mouth movements)
 #   2. Articulatory distinctness (clear, measurable geometric changes)
-#   3. Coverage across phonetic categories (bilabial, open vowels, rounded vowels)
+#   3. Frequency in Korean speech (must appear often for reliable analysis)
 #
 # Total: 14 phonemes (matching PIA's English phoneme count for fair comparison)
 # IMPORTANT: Use sorted() order for compatibility with preprocessed data and trained model
+#
+# PIA 논문 기반 선정: Visual Salience (입모양 변화가 뚜렷한 음소)
+# - Bilabials (ㅁ,ㅂ,ㅃ,ㅍ): 입술 완전히 닫힘 → 딥페이크 탐지에 최적
+# - 모음: 입 벌림/둥글게 등 명확한 형태 변화
 KEEP_PHONEMES_KOREAN = {
     # ---- Priority 1: Bilabial Consonants (4 phonemes) ----
-    # Highest reliability - require complete lip closure
-    "M",   # ㅁ - Bilabial nasal (lips completely closed, nasal airflow)
-    "B",   # ㅂ - Bilabial stop (lips closed, airflow blocked)
-    "BB",  # ㅃ - Tense bilabial (tight closure, glottis tensed)
-    "Ph",  # ㅍ - Aspirated bilabial (forceful release after closure)
-    # MAR Range: 0.10-0.30 (very low - lips closed)
+    # Complete lip closure - highest visual salience for deepfake detection
+    "M",   # ㅁ - Bilabial nasal (lips completely closed)
+    "B",   # ㅂ - Bilabial stop (lips closed, plosive)
+    "BB",  # ㅃ - Tense bilabial (강한 입술 닫힘)
+    "Ph",  # ㅍ - Aspirated bilabial (입술 닫힘 + 기식)
+    # MAR Range: 0.05-0.20 (closed lips)
 
     # ---- Priority 2: Open Vowels (3 phonemes) ----
     # Wide mouth opening - high visual salience
-    "A",   # ㅏ - Low front vowel (wide mouth opening, low tongue position)
-    "E",   # ㅐ/ㅔ - Mid front vowel (moderate opening, front tongue)
-    "iA",  # ㅑ - Compound vowel with glide (dynamic mouth movement)
-    # MAR Range: 0.60-0.90 (very high - mouth open)
+    "A",   # ㅏ - Low front vowel (wide opening)
+    "E",   # ㅐ/ㅔ - Mid front vowel (moderate opening)
+    "iA",  # ㅑ - Compound vowel (dynamic movement)
+    # MAR Range: 0.50-0.90
 
-    # ---- Priority 3: Rounded Vowels (4 phonemes) ----
+    # ---- Priority 3: Rounded Vowels (3 phonemes) ----
     # Visible lip protrusion/rounding
-    "O",   # ㅗ - Mid back rounded (visible lip rounding)
-    "U",   # ㅜ - High back rounded (tight lip rounding, protrusion)
-    "iO",  # ㅛ - Compound with glide (dynamic rounding)
-    "iU",  # ㅠ - Compound with glide (strong protrusion)
-    # MAR Range: 0.20-0.50 (moderate - lips rounded)
+    "O",   # ㅗ - Mid back rounded (lip rounding)
+    "U",   # ㅜ - High back rounded (tight rounding)
+    "iO",  # ㅛ - Compound (dynamic rounding)
+    # MAR Range: 0.20-0.50
 
-    # ---- Priority 4: Close Vowels (2 phonemes) ----
-    # Moderate visibility
-    "I",   # ㅣ - High front unrounded (lips stretched horizontally)
-    "EU",  # ㅡ - High central unrounded (neutral lip position)
-    # MAR Range: 0.30-0.60 (moderate)
+    # ---- Priority 4: Close/Neutral Vowels (3 phonemes) ----
+    "I",   # ㅣ - High front (lips stretched horizontally)
+    "EU",  # ㅡ - High central (neutral lip position)
+    "iU",  # ㅠ - Compound (ㅣ→ㅜ transition)
+    # MAR Range: 0.30-0.60
 
-    # ---- Bonus: Palatal Consonant (1 phoneme) ----
-    "CHh"  # ㅊ - Palatal affricate with noticeable lip rounding (similar to English /ʃ/)
+    # ---- Priority 5: Aspirated Consonant (1 phoneme) ----
+    "CHh"  # ㅊ - Aspirated affricate (mouth open for aspiration)
+    # MAR Range: 0.30-0.50
 }
 
 # IGNORED_PHONEMES: Low-confidence phonemes to exclude from analysis
@@ -84,8 +88,8 @@ IGNORED_PHONEMES_KOREAN = {
 CLOSURE_PHONEMES_KOREAN = {
     "M",   # ㅁ - Complete closure (nasal airflow through nose)
     "B",   # ㅂ - Complete closure (stop consonant, airflow blocked)
-    "BB",  # ㅃ - Tight closure (tense version)
-    "Ph"   # ㅍ - Complete closure (aspirated release)
+    "BB",  # ㅃ - Tense bilabial (강한 입술 닫힘)
+    "Ph",  # ㅍ - Aspirated bilabial (입술 닫힘 후 기식)
 }
 
 # Closure detection threshold
@@ -204,11 +208,11 @@ def detect_mismatch(phoneme: str, closure_score: float) -> bool:
 
 # Map phonemes to articulatory categories for analysis
 PHONEME_CATEGORIES = {
-    "bilabial": {"M", "B", "BB", "Ph"},
-    "open_vowel": {"A", "E", "iA"},
-    "rounded_vowel": {"O", "U", "iO", "iU"},
-    "close_vowel": {"I", "EU"},
-    "palatal": {"CHh"}
+    "bilabial": {"M", "B", "BB", "Ph"},  # 양순음 (입술 완전히 닫힘) - 딥페이크 탐지 핵심
+    "open_vowel": {"A", "E", "iA"},      # 개모음 (입 크게 벌림)
+    "rounded_vowel": {"O", "U", "iO", "iU"},  # 원순모음 (입술 둥글게)
+    "close_vowel": {"I", "EU"},          # 폐모음/중설모음
+    "aspirated": {"CHh"}                 # 격음 (기식 동반)
 }
 
 
@@ -226,52 +230,6 @@ def get_phoneme_category(phoneme: str) -> str:
         if phoneme in phonemes:
             return category
     return "unknown"
-
-
-# ============================================================================
-# Expected MAR (Mouth Aspect Ratio) Ranges for Validation
-# ============================================================================
-
-# Reference ranges from phoneme_classifier.py analysis
-EXPECTED_MAR_RANGES = {
-    "M": (0.10, 0.30),   # Bilabial - lips closed
-    "B": (0.10, 0.30),
-    "BB": (0.10, 0.30),
-    "Ph": (0.10, 0.30),
-
-    "A": (0.60, 0.90),   # Open vowels - mouth open
-    "E": (0.50, 0.80),
-    "iA": (0.55, 0.85),
-
-    "O": (0.20, 0.50),   # Rounded vowels - lips rounded
-    "U": (0.20, 0.50),
-    "iO": (0.25, 0.55),
-    "iU": (0.25, 0.55),
-
-    "I": (0.30, 0.60),   # Close vowels - moderate opening
-    "EU": (0.30, 0.60),
-
-    "CHh": (0.25, 0.55)  # Palatal - moderate rounding
-}
-
-
-def validate_mar_range(phoneme: str, mar_value: float) -> bool:
-    """
-    Validate if MAR value is within expected range for phoneme.
-
-    Args:
-        phoneme: Korean MFA phoneme
-        mar_value: Measured mouth aspect ratio
-
-    Returns:
-        True if MAR is within expected range (±20% tolerance)
-    """
-    if phoneme not in EXPECTED_MAR_RANGES:
-        return True  # Unknown phoneme, skip validation
-
-    min_mar, max_mar = EXPECTED_MAR_RANGES[phoneme]
-    tolerance = 0.2
-    return (min_mar - tolerance) <= mar_value <= (max_mar + tolerance)
 
 
 def phoneme_to_korean(phoneme: str) -> str:

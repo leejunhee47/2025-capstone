@@ -251,6 +251,126 @@ def calculate_risk_level(suspicious_ratio: float) -> str:
         return "low"
 
 
+def _build_detailed_explanation_v2(
+    verdict: str,
+    confidence: float,
+    suspicious_intervals: List[Dict],
+    interval_xai_results: List[Dict]
+) -> str:
+    """
+    Build detailed explanation using v2.0 style (MAR deviation priority).
+
+    Priority order:
+    1. MAR Deviation (most interpretable)
+    2. Interval info (if MAR not available)
+    3. Branch contribution (fallback)
+
+    Args:
+        verdict: "real" | "fake"
+        confidence: 0.0~1.0
+        suspicious_intervals: Stage 1 intervals
+        interval_xai_results: Stage 2 XAI results (PIAExplainer format)
+
+    Returns:
+        detailed_explanation: Korean explanation string
+    """
+    if verdict == "fake" and interval_xai_results:
+        parts = [f"종합 분석 결과 {confidence*100:.1f}% 확률로 딥페이크입니다."]
+
+        # Collect all abnormal phonemes across intervals
+        all_abnormal_phonemes = []
+        best_interval = None
+
+        for i, xai in enumerate(interval_xai_results):
+            geometry_analysis = xai.get('geometry_analysis', {})
+            abnormal_phonemes = geometry_analysis.get('abnormal_phonemes', [])
+
+            if abnormal_phonemes:
+                for abnormal in abnormal_phonemes:
+                    all_abnormal_phonemes.append({
+                        **abnormal,
+                        'interval_idx': i,
+                        'interval': suspicious_intervals[i] if i < len(suspicious_intervals) else None
+                    })
+
+                # Track first interval with abnormal phonemes
+                if best_interval is None and i < len(suspicious_intervals):
+                    best_interval = suspicious_intervals[i]
+
+        # [Priority 1] MAR Deviation based explanation
+        if all_abnormal_phonemes:
+            # Sort by z-score (most severe first)
+            sorted_abnormal = sorted(
+                all_abnormal_phonemes,
+                key=lambda x: abs(x.get('z_score', 0)),
+                reverse=True
+            )
+
+            top_abnormal = sorted_abnormal[:2]  # Top 2
+            phoneme_descriptions = []
+
+            for abnormal in top_abnormal:
+                phoneme = abnormal.get('phoneme', '?')
+                deviation = abnormal.get('deviation', 0)
+                expected_mean = abnormal.get('expected_mean', 0.3)
+
+                if expected_mean > 0:
+                    deviation_pct = abs(deviation / expected_mean * 100)
+                else:
+                    deviation_pct = abs(deviation) * 100
+
+                direction = "더 크게" if deviation > 0 else "더 작게"
+                phoneme_descriptions.append(
+                    f"'{phoneme}' 발음 시 입을 {deviation_pct:.0f}% {direction} 벌림"
+                )
+
+            if phoneme_descriptions:
+                parts.append(f"입모양 분석 결과: {', '.join(phoneme_descriptions)}.")
+
+            # Add interval info if available
+            if best_interval:
+                parts.append(
+                    f"이상 패턴은 {best_interval['start_time']:.1f}~{best_interval['end_time']:.1f}초 구간에서 "
+                    f"특히 두드러집니다."
+                )
+
+        # [Priority 2] Interval info (if MAR deviation not available)
+        elif suspicious_intervals:
+            first_interval = suspicious_intervals[0]
+            parts.append(
+                f"PIA 모델이 {first_interval['start_time']:.1f}~{first_interval['end_time']:.1f}초 구간에서 "
+                f"입모양 불일치를 탐지했습니다."
+            )
+
+            if len(suspicious_intervals) > 1:
+                parts.append(f"(총 {len(suspicious_intervals)}개의 의심 구간 분석)")
+
+        # [Priority 3] Branch contribution (fallback)
+        elif interval_xai_results:
+            first_xai = interval_xai_results[0]
+            branch_contrib = first_xai.get('branch_contributions', {})
+
+            if branch_contrib:
+                # Find top branch
+                top_branch = branch_contrib.get('top_branch', 'unknown')
+                if top_branch != 'unknown':
+                    parts.append(f"특히 {top_branch} 특징에서 조작 흔적이 두드러집니다.")
+
+        return " ".join(parts)
+
+    elif verdict == "real":
+        # Real verdict - simpler explanation
+        real_confidence = (1 - confidence) * 100
+        return (
+            f"전체 {len(suspicious_intervals)}개 구간을 분석한 결과, "
+            f"부자연스러운 음성-입모양 불일치 패턴이 감지되지 않았습니다. "
+            f"신뢰도 {real_confidence:.1f}%로 진짜 영상으로 판정되었습니다."
+        )
+
+    else:
+        return "딥페이크 패턴이 감지되지 않았습니다."
+
+
 def build_korean_summary(
     verdict: str,
     confidence: float,
@@ -329,41 +449,13 @@ def build_korean_summary(
 
     top_phonemes = sorted(phoneme_counts.keys(), key=lambda p: phoneme_counts[p], reverse=True)[:3]
 
-    # Detailed explanation (reuse branch contribution logic)
-    if verdict == "fake" and interval_xai_results:
-        explanations = []
-        for i, xai in enumerate(interval_xai_results[:2]):  # Max 2 intervals
-            interval = suspicious_intervals[i]
-            branch_contrib = xai.get('branch_contributions', {})
-
-            # Find top branch (align with PIAExplainer structure)
-            if branch_contrib:
-                top_branch_item = max(
-                    branch_contrib.items(),
-                    key=lambda x: x[1].get('contribution_percent', 0) if isinstance(x[1], dict) else 0
-                )
-                top_branch = top_branch_item[0]
-                top_contrib = top_branch_item[1].get('contribution_percent', 0)
-            else:
-                # Fallback for older format
-                top_branch = xai.get('top_branch', 'visual')
-                top_contrib = xai.get('top_branch_contrib', 0.0)
-
-            phoneme_analysis = xai.get('phoneme_analysis', {})
-            if phoneme_analysis and 'phoneme_scores' in phoneme_analysis:
-                top_phoneme = phoneme_analysis['phoneme_scores'][0].get('phoneme_korean', '?')
-            else:
-                top_phoneme = xai.get('top_phoneme', '?')
-
-            explanations.append(
-                f"구간 {i+1} ({interval['start_time']:.1f}s-{interval['end_time']:.1f}s): "
-                f"{top_branch} 브랜치 {top_contrib:.1f}% 기여, "
-                f"'{top_phoneme}' 음소에서 이상 패턴"
-            )
-
-        detailed = " | ".join(explanations)
-    else:
-        detailed = "딥페이크 패턴이 감지되지 않았습니다."
+    # Detailed explanation (v2.0 style: MAR deviation priority)
+    detailed = _build_detailed_explanation_v2(
+        verdict=verdict,
+        confidence=confidence,
+        suspicious_intervals=suspicious_intervals,
+        interval_xai_results=interval_xai_results
+    )
 
     return {
         'title': title,

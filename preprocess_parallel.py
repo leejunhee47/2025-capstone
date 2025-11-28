@@ -154,8 +154,16 @@ def process_single_video(
 
         try:
             logger.info(f"[2/3] MAR extraction started for {video_id}")
-            mar_result = process_single_video.mar_extractor.extract_from_video(video_path, max_frames=num_frames)
+            # Use frame_indices to ensure synchronization with VideoPreprocessor
+            mar_result = process_single_video.mar_extractor.extract_from_video(
+                video_path,
+                frame_indices=frame_indices.astype(int).tolist()
+            )
             geometry = np.array(mar_result['mar_vertical']).reshape(-1, 1)  # (T, 1) - PIA paper format
+
+            # Validation: Ensure frame count matches
+            assert geometry.shape[0] == num_frames, \
+                f"MAR frame count ({geometry.shape[0]}) != VideoPreprocessor frame count ({num_frames})"
 
             # Debug print
             nonzero_ratio = np.sum(geometry != 0) / geometry.size
@@ -173,11 +181,18 @@ def process_single_video(
 
         try:
             logger.info(f"[3/3] ArcFace extraction started for {video_id}")
+            # Use frame_indices to ensure synchronization with VideoPreprocessor
+            # batch_size=32: Process frames in batches for 3-4x speedup (GPU optimization)
             arcface = process_single_video.arcface_extractor.extract_from_video(
                 video_path,
-                max_frames=num_frames,
-                show_progress=False
+                frame_indices=frame_indices.astype(int).tolist(),
+                show_progress=True,
+                batch_size=64  # Process 64 frames at once for maximum GPU utilization (doubled from 32)
             )  # (T, 512)
+
+            # Validation: Ensure frame count matches
+            assert arcface.shape[0] == num_frames, \
+                f"ArcFace frame count ({arcface.shape[0]}) != VideoPreprocessor frame count ({num_frames})"
 
             # Debug print
             zero_frames = np.sum(np.all(arcface == 0, axis=1))
@@ -286,10 +301,10 @@ def preprocess_dataset_parallel(
 
     # 경로 설정
     index_file = Path(f"preprocessed_data_real/{split}_index.json")  # 인덱스는 기존 사용
-    output_dir = Path(f"preprocessed_data_phoneme/{split}")  # ✨ 새 폴더 (음소 라벨 포함)
+    output_dir = Path(f"F:/preprocessed_data_pia_1120/{split}")  # Full-frame PIA preprocessing (Nov 20) - F: drive
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    checkpoint_path = Path(f"preprocessed_data_phoneme/{split}_checkpoint.json")  # ✨ 새 폴더
+    checkpoint_path = Path(f"F:/preprocessed_data_pia_1120/{split}_checkpoint.json")  # Full-frame checkpoint - F: drive
 
     # 인덱스 로드
     print(f"[1/5] 인덱스 로드: {index_file}")
@@ -327,8 +342,8 @@ def preprocess_dataset_parallel(
     # 설정
     print("[2/5] 전처리 설정")
     config = {
-        'target_fps': 30,
-        'max_frames': 50,
+        'target_fps': 5,  # 5 FPS sampling: 6x faster, maintains sampling quality (10 frames → 5 selected per phoneme)
+        'max_frames': None,  # Full-frame extraction (PIA mode) - None = all frames
         'frame_size': [224, 224],
         'max_duration': 60,
         'min_duration': 15,
@@ -338,7 +353,8 @@ def preprocess_dataset_parallel(
         'n_fft': 2048,
         'lip_size': [112, 112]
     }
-    print(f"  - 프레임: {config['max_frames']}개, {config['frame_size']}")
+    print(f"  - 프레임: 5 FPS 샘플링 (6배 속도 향상, max_frames=None)")
+    print(f"  - 프레임 크기: {config['frame_size']}")
     print(f"  - 오디오: {config['n_mfcc']} MFCC, {config['sample_rate']}Hz")
     print(f"  - 입술: {config['lip_size']}")
     print()
@@ -357,7 +373,6 @@ def preprocess_dataset_parallel(
     start_time = time.time()
 
     # 병렬 처리
-    batch_count = 0
     try:
         with Pool(processes=num_workers) as pool:
             # imap_unordered로 결과를 순서와 상관없이 받음 (더 빠름)
@@ -375,24 +390,10 @@ def preprocess_dataset_parallel(
                         failed.append(fail_dict)
                         processed_indices.add(fail_dict['idx'])
 
+                    # 매 비디오마다 체크포인트 저장 (데이터 손실 방지)
+                    save_checkpoint(checkpoint_path, successful, failed, processed_indices)
+
                     pbar.update(1)
-
-                    # 주기적 체크포인트 저장
-                    batch_count += 1
-                    if batch_count % batch_size == 0:
-                        save_checkpoint(checkpoint_path, successful, failed, processed_indices)
-
-                        # 진행상황 표시
-                        elapsed = time.time() - start_time
-                        speed = len(processed_indices) / elapsed
-                        eta = (len(samples) - len(processed_indices)) / speed if speed > 0 else 0
-
-                        pbar.set_postfix({
-                            'success': len(successful),
-                            'fail': len(failed),
-                            'speed': f'{speed:.1f}v/s',
-                            'ETA': f'{eta/60:.1f}m'
-                        })
 
     except KeyboardInterrupt:
         print("\n\n중단됨! 체크포인트 저장 중...")
@@ -414,14 +415,14 @@ def preprocess_dataset_parallel(
     print(f"[5/5] 결과 저장")
 
     # 성공한 샘플 인덱스
-    success_index_path = Path(f"preprocessed_data_phoneme/{split}_preprocessed_index.json")  # ✨ 새 폴더
+    success_index_path = Path(f"F:/preprocessed_data_pia_1120/{split}_preprocessed_index.json")  # Full-frame index - F: drive
     with open(success_index_path, 'w', encoding='utf-8') as f:
         json.dump(successful, f, indent=2, ensure_ascii=False)
     print(f"  [OK] 성공: {success_index_path} ({len(successful)} 샘플)")
 
     # 실패한 샘플 로그
     if failed:
-        failed_log_path = Path(f"preprocessed_data_phoneme/{split}_failed.json")  # ✨ 새 폴더
+        failed_log_path = Path(f"F:/preprocessed_data_pia_1120/{split}_failed.json")  # Full-frame failed log - F: drive
         with open(failed_log_path, 'w', encoding='utf-8') as f:
             json.dump(failed, f, indent=2, ensure_ascii=False)
         print(f"  [XX] 실패: {failed_log_path} ({len(failed)} 샘플)")

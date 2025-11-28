@@ -1,5 +1,7 @@
 import json
 import time
+import os
+import uuid
 from pathlib import Path
 from typing import Dict, Optional, Any, List
 import numpy as np
@@ -77,6 +79,60 @@ class HybridXAIPipeline:
 
         logger.info("Unified Hybrid Pipeline Initialized.")
 
+    def _download_from_url(self, url: str, video_id: str = None) -> str:
+        """
+        YouTube/TikTok/Reels URL에서 비디오 다운로드.
+
+        Args:
+            url: 비디오 URL (YouTube Shorts, TikTok, Instagram Reels 등)
+            video_id: 저장할 파일명 (None이면 자동 생성)
+
+        Returns:
+            다운로드된 비디오 파일 경로
+        """
+        try:
+            import yt_dlp
+        except ImportError:
+            raise RuntimeError("yt-dlp not installed. Run: pip install yt-dlp")
+
+        if video_id is None:
+            video_id = f"video_{uuid.uuid4().hex[:8]}"
+
+        # 다운로드 디렉토리 설정
+        download_dir = Path(__file__).parent.parent.parent / "cache" / "downloads"
+        download_dir.mkdir(parents=True, exist_ok=True)
+
+        output_template = str(download_dir / f"{video_id}.%(ext)s")
+
+        logger.info(f"Downloading video from URL: {url[:50]}...")
+
+        ydl_opts = {
+            'format': 'best[ext=mp4]/bestvideo+bestaudio/best',
+            'outtmpl': output_template,
+            'quiet': True,
+            'no_warnings': True,
+            'merge_output_format': 'mp4',
+            'socket_timeout': 30,
+            'retries': 3,
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+
+            # 다운로드된 파일 찾기
+            downloaded_files = list(download_dir.glob(f"{video_id}.*"))
+            if downloaded_files:
+                video_path = str(downloaded_files[0])
+                logger.info(f"Downloaded: {Path(video_path).name}")
+                return video_path
+            else:
+                raise RuntimeError(f"Download completed but file not found: {video_id}")
+
+        except Exception as e:
+            logger.error(f"Download failed: {e}")
+            raise RuntimeError(f"Failed to download video from URL: {e}")
+
     def process_video(
         self,
         video_path: str,
@@ -87,25 +143,34 @@ class HybridXAIPipeline:
         save_visualizations: bool = True,
         use_preprocessed: bool = None # Unused
     ) -> Dict[str, Any]:
-        
+
         start_time = time.time()
-        
+
+        # URL 감지 및 다운로드
+        cleanup_downloaded_file = False
+        if video_path.startswith(('http://', 'https://')):
+            logger.info(f"URL detected: {video_path[:60]}...")
+            local_video_path = self._download_from_url(video_path, video_id)
+            cleanup_downloaded_file = True
+        else:
+            local_video_path = video_path
+
         if video_id is None:
-            video_id = Path(video_path).stem
-            
+            video_id = Path(local_video_path).stem
+
         if output_dir is None:
             output_dir = f"outputs/xai/hybrid/{video_id}"
         Path(output_dir).mkdir(parents=True, exist_ok=True)
-        
-        logger.info(f"Processing: {video_path}")
+
+        logger.info(f"Processing: {local_video_path}")
 
         # STEP 1: Unified Feature Extraction (with cache)
         logger.info("STEP 1: Unified Feature Extraction...")
         try:
             if self.feature_cache is not None:
-                features = self.feature_cache.get_or_extract(video_path, self.feature_extractor)
+                features = self.feature_cache.get_or_extract(local_video_path, self.feature_extractor)
             else:
-                features = self.feature_extractor.extract_all(video_path)
+                features = self.feature_extractor.extract_all(local_video_path)
         except Exception as e:
             logger.error(f"Feature extraction failed: {e}")
             import traceback
@@ -134,7 +199,10 @@ class HybridXAIPipeline:
             suspicious_intervals = []
 
         # STEP 3.5: Filter intervals by phoneme coverage (Pre-filtering)
+        # [MODIFIED] 모든 의심 구간 보존, phoneme_valid 플래그로 구분
         logger.info("STEP 3.5: Filtering intervals by phoneme coverage...")
+        all_suspicious_intervals = []  # 시각화용: 모든 구간 (음소 유무 무관)
+
         if len(suspicious_intervals) > 0:
             from ..utils.korean_phoneme_config import KEEP_PHONEMES_KOREAN
 
@@ -162,8 +230,14 @@ class HybridXAIPipeline:
                     # Calculate coverage (intersection with global set)
                     coverage = len(interval_phonemes & global_phoneme_set)
 
-                    # Filter by threshold (3 phonemes, relaxed for short intervals)
+                    # [NEW] 모든 구간에 phoneme_valid 플래그 추가
                     COVERAGE_THRESHOLD = 3
+                    interval_with_flag = interval.copy()
+                    interval_with_flag['phoneme_coverage'] = coverage
+                    interval_with_flag['phoneme_valid'] = coverage >= COVERAGE_THRESHOLD
+                    all_suspicious_intervals.append(interval_with_flag)
+
+                    # Filter by threshold (3 phonemes, relaxed for short intervals)
                     if coverage >= COVERAGE_THRESHOLD:
                         valid_intervals.append(interval)
                         logger.info(
@@ -177,7 +251,7 @@ class HybridXAIPipeline:
                             f"(below threshold {COVERAGE_THRESHOLD})"
                         )
 
-                # Update suspicious_intervals with filtered results
+                # Update suspicious_intervals with filtered results (PIA용)
                 if len(valid_intervals) == 0:
                     logger.warning(
                         f"All {len(suspicious_intervals)} intervals filtered out due to low phoneme coverage. "
@@ -192,92 +266,38 @@ class HybridXAIPipeline:
                     suspicious_intervals = valid_intervals
             else:
                 logger.warning("Phoneme labels not available, skipping coverage filtering")
+                # 음소 정보 없으면 모든 구간을 valid로 표시
+                for interval in suspicious_intervals:
+                    interval_with_flag = interval.copy()
+                    interval_with_flag['phoneme_valid'] = True
+                    interval_with_flag['phoneme_coverage'] = -1  # Unknown
+                    all_suspicious_intervals.append(interval_with_flag)
 
-        # STEP 4: PIA on intervals
-        logger.info("STEP 4: PIA analysis on suspicious intervals...")
+        # all_suspicious_intervals가 비어있으면 원본 사용
+        if not all_suspicious_intervals and suspicious_intervals:
+            for interval in suspicious_intervals:
+                interval_with_flag = interval.copy()
+                interval_with_flag['phoneme_valid'] = True
+                interval_with_flag['phoneme_coverage'] = -1
+                all_suspicious_intervals.append(interval_with_flag)
+
+        # STEP 4: PIA Full Video Analysis (verdict + XAI 동시 획득)
+        # [OPTIMIZED] 기존: interval 분석 → full 분석 (2번 실행)
+        #             변경: full 분석 1회로 통합 (~15초 절감)
+        logger.info("STEP 4: PIA analysis (full video)...")
         try:
-            if len(suspicious_intervals) == 0:
-                # Fallback Tier 2: Full video
-                logger.warning("No suspicious intervals found, analyzing full video")
-                pia_result = self.stage2.predict_full_video(features)
-            else:
-                interval_results = []
-                unknown_count = 0
+            pia_result = self.stage2.predict_full_video(features)
 
-                # Max 5개 + Early stop with reset
-                for i, interval in enumerate(suspicious_intervals[:5]):
-                    logger.info(f"Analyzing interval {i+1}/{min(5, len(suspicious_intervals))}: "
-                               f"{interval['start']:.1f}~{interval['end']:.1f}s")
-
-                    result = self.stage2.predict_interval(
-                        features,
-                        interval['start'],
-                        interval['end'],
-                        filter_silence=True
-                    )
-
-                    if result['verdict'] == 'unknown':
-                        # [보강] Early stop reset: Low frame count는 pass
-                        # [OPTIMIZED] 30 → 15 (stage2_analyzer와 일치)
-                        if result.get('valid_frame_count', 0) < 15:
-                            logger.info(f"Interval {i+1} unknown due to low frame count (<15), "
-                                       f"not counting toward early stop")
-                            continue  # unknown count 증가 안함
-
-                        unknown_count += 1
-                        logger.warning(f"Interval {i+1} returned unknown, consecutive count: {unknown_count}")
-
-                        if unknown_count >= 2:
-                            logger.warning("Early stop: 2 consecutive unknowns")
-                            break
-                    else:
-                        unknown_count = 0  # Reset on success
-                        interval_results.append(result)
-
-                # Fallback Tier 1: Top 2 재시도 (침묵 포함)
-                if len(interval_results) == 0:
-                    logger.warning("All intervals failed, retrying top 2 without silence filtering")
-                    for interval in suspicious_intervals[:2]:
-                        result = self.stage2.predict_interval(
-                            features,
-                            interval['start'],
-                            interval['end'],
-                            filter_silence=False  # 침묵 포함
-                        )
-                        if result['verdict'] != 'unknown':
-                            interval_results.append(result)
-
-                    # Fallback Tier 2: Full video
-                    if len(interval_results) == 0:
-                        logger.error("All fallback strategies failed, analyzing full video")
-                        pia_result = self.stage2.predict_full_video(features)
-                    else:
-                        pia_result = self._aggregate_interval_results(interval_results)
-                else:
-                    # Weighted voting
-                    pia_result = self._aggregate_interval_results(interval_results)
-
-            # [NEW] STEP 4.5: Fetch XAI info via predict_full_video() for visualizations
-            # Only if pia_result doesn't already have XAI info (from interval analysis)
-            if 'geometry_analysis' not in pia_result and 'phoneme_analysis' not in pia_result:
-                logger.info("STEP 4.5: Fetching XAI info from full video analysis...")
-                try:
-                    xai_full_result = self.stage2.predict_full_video(features)
-                    # Merge XAI info only (keep interval analysis verdict/confidence)
-                    if 'geometry_analysis' in xai_full_result:
-                        pia_result['geometry_analysis'] = xai_full_result['geometry_analysis']
-                    if 'phoneme_analysis' in xai_full_result:
-                        pia_result['phoneme_analysis'] = xai_full_result['phoneme_analysis']
-                    if 'model_info' in xai_full_result:
-                        pia_result['model_info'] = xai_full_result['model_info']
-                    # [NEW] Merge phoneme transcription info for Korean display
-                    if 'all_phonemes' in xai_full_result:
-                        pia_result['all_phonemes'] = xai_full_result['all_phonemes']
-                    if 'matched_phonemes' in xai_full_result and 'matched_phonemes' not in pia_result:
-                        pia_result['matched_phonemes'] = xai_full_result['matched_phonemes']
-                    logger.info("XAI info merged successfully")
-                except Exception as e:
-                    logger.warning(f"Failed to fetch XAI info: {e}")
+            # suspicious_intervals 정보를 pia_result에 첨부 (시각화용)
+            if len(suspicious_intervals) > 0:
+                best_interval = suspicious_intervals[0]  # 가장 의심스러운 구간
+                pia_result['best_interval'] = {
+                    'start': best_interval['start'],
+                    'end': best_interval['end'],
+                    'mmms_confidence': best_interval.get('confidence', 0)
+                }
+                pia_result['all_intervals'] = suspicious_intervals
+                logger.info(f"  Best suspicious interval: {best_interval['start']:.1f}~{best_interval['end']:.1f}s")
 
         except Exception as e:
             logger.error(f"PIA prediction failed: {e}")
@@ -288,8 +308,8 @@ class HybridXAIPipeline:
         # STEP 5: Ensemble & Summary
         logger.info("STEP 5: Ensemble & Summary...")
         detection = self.aggregator.ensemble(mmms_result, pia_result)
-        
-        video_info = self.aggregator.extract_video_info(video_path)
+
+        video_info = self.aggregator.extract_video_info(local_video_path)
         summary = self.aggregator.generate_korean_summary(detection, pia_result, video_info)
         
         # Thumbnail & Visualizations
@@ -303,7 +323,7 @@ class HybridXAIPipeline:
             thumbnail_path = str(Path(output_dir) / 'thumbnail.png')
             try:
                 generate_detection_card(
-                    video_path=video_path,
+                    video_path=local_video_path,
                     detection=detection,
                     output_path=thumbnail_path
                 )
@@ -312,13 +332,14 @@ class HybridXAIPipeline:
                 logger.warning(f"Thumbnail generation failed: {e}")
                 thumbnail_path = None
             
-            # [NEW] MMMS-BA Timeline 시각화
+            # [NEW] MMMS-BA Timeline 시각화 (모든 의심 구간 표시)
             try:
                 stage1_viz_path = self._visualize_stage1_timeline(
                     mmms_result=mmms_result,
                     suspicious_intervals=suspicious_intervals,
+                    all_suspicious_intervals=all_suspicious_intervals,  # 음소 필터링 전 모든 구간
                     features=features,
-                    video_path=video_path,
+                    video_path=local_video_path,
                     output_dir=output_dir
                 )
                 logger.info(f"Generated Stage1 timeline: {stage1_viz_path}")
@@ -352,10 +373,26 @@ class HybridXAIPipeline:
 
                 # Full video PIA 결과에 XAI 정보가 있는 경우
                 if 'geometry_analysis' in pia_result or 'phoneme_analysis' in pia_result:
+                    # [FIX] 의심 구간 한글 transcription 추출 (단어 레벨 필터링)
+                    korean_transcription = None
+                    whisper_result = features.get('whisper_result', {})
+                    if 'best_interval' in pia_result:
+                        interval = pia_result['best_interval']
+                        korean_transcription = self._get_transcription_for_interval(
+                            whisper_result,
+                            interval.get('start'),
+                            interval.get('end')
+                        )
+                    else:
+                        # Fallback: 전체 transcription
+                        korean_transcription = self._get_transcription_for_interval(whisper_result)
+
                     pia_viz_path = self._visualize_pia_result(
                         pia_result=pia_result,
-                        video_path=video_path,
-                        output_dir=output_dir
+                        video_path=local_video_path,
+                        output_dir=output_dir,
+                        final_detection=detection,  # 앙상블 결과 전달
+                        korean_transcription=korean_transcription  # 한글 전사 전달
                     )
                     logger.info(f"Generated PIA XAI visualization: {pia_viz_path}")
             except Exception as e:
@@ -365,22 +402,14 @@ class HybridXAIPipeline:
 
         processing_time_ms = (time.time() - start_time) * 1000
         
-        # Final Result
+        # Final Result (간소화: 4개 필드만 반환)
         result = self.aggregator.build_final_result(
-            video_path=video_path,
+            video_path=local_video_path,
             video_id=video_id,
-            output_dir=output_dir,
             detection=detection,
             summary=summary,
             video_info=video_info,
-            processing_time_ms=processing_time_ms,
-            mmms_result=mmms_result,
-            pia_result=pia_result,
-            thumbnail_path=thumbnail_path,
-            stage1_timeline_path=stage1_viz_path,
-            pia_xai_path=pia_viz_path,
-            interval_xai_paths=interval_viz_paths,
-            suspicious_intervals=suspicious_intervals  # [NEW] Pass suspicious intervals for interface-compliant JSON
+            processing_time_ms=processing_time_ms
         )
         
         # Save JSON
@@ -395,7 +424,15 @@ class HybridXAIPipeline:
         logger.info(f"  Result saved to: {json_path}")
         logger.info(f"Verdict: {detection['verdict'].upper()} ({detection['confidence']:.1%})")
         logger.info("=" * 80 + "\n")
-        
+
+        # 다운로드한 임시 파일 정리
+        if cleanup_downloaded_file and Path(local_video_path).exists():
+            try:
+                os.remove(local_video_path)
+                logger.info(f"Cleaned up downloaded file: {local_video_path}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup downloaded file: {e}")
+
         return result
 
     def _error_result(self, error_title, error_msg):
@@ -404,6 +441,71 @@ class HybridXAIPipeline:
             'detection': {'verdict': 'error', 'confidence': 0.0},
             'summary': {'title': error_title, 'detailed_explanation': error_msg}
         }
+
+    def _get_transcription_for_interval(
+        self,
+        whisper_result: Dict[str, Any],
+        start_sec: Optional[float] = None,
+        end_sec: Optional[float] = None
+    ) -> str:
+        """
+        의심 구간에 해당하는 한글 단어만 추출 (단어 레벨 필터링).
+
+        Args:
+            whisper_result: WhisperX 결과 (segments, transcription 포함)
+            start_sec: 시작 시간 (None이면 전체)
+            end_sec: 종료 시간 (None이면 전체)
+
+        Returns:
+            필터링된 한글 텍스트
+        """
+        segments = whisper_result.get('segments', [])
+
+        # Helper: 세그먼트 텍스트에서 전체 transcription 추출
+        def get_full_transcription():
+            # 1. transcription 필드 확인
+            trans = whisper_result.get('transcription', '')
+            if trans:
+                return trans.strip()
+            # 2. segments의 text 필드 결합
+            segment_texts = [seg.get('text', '') for seg in segments if seg.get('text')]
+            return ' '.join(segment_texts).strip()
+
+        # Fallback: 의심 구간이 없으면 전체 transcription 반환
+        if start_sec is None or end_sec is None:
+            return get_full_transcription()
+
+        # 1차 시도: 단어 레벨 필터링
+        interval_words = []
+        for seg in segments:
+            words = seg.get('words', [])
+            for word_info in words:
+                word_start = word_info.get('start', 0)
+                word_end = word_info.get('end', 0)
+
+                # 단어가 의심 구간과 겹치는지 확인
+                if word_end >= start_sec and word_start <= end_sec:
+                    interval_words.append(word_info.get('word', ''))
+
+        if interval_words:
+            return ' '.join(interval_words).strip()
+
+        # 2차 시도: 세그먼트 레벨 필터링 (단어 타임스탬프가 없는 경우)
+        interval_segments = []
+        for seg in segments:
+            seg_start = seg.get('start', 0)
+            seg_end = seg.get('end', 0)
+            # 세그먼트가 의심 구간과 겹치는지 확인
+            if seg_end >= start_sec and seg_start <= end_sec:
+                seg_text = seg.get('text', '')
+                if seg_text:
+                    interval_segments.append(seg_text.strip())
+
+        if interval_segments:
+            return ' '.join(interval_segments).strip()
+
+        # 최종 fallback: 전체 transcription
+        return get_full_transcription()
 
     def _aggregate_interval_results(self, interval_results: List[Dict]) -> Dict[str, Any]:
         """
@@ -468,58 +570,60 @@ class HybridXAIPipeline:
         suspicious_intervals: List[Dict],
         features: Dict[str, Any],
         video_path: str,
-        output_dir: str
+        output_dir: str,
+        all_suspicious_intervals: List[Dict] = None
     ) -> str:
         """
         MMMS-BA Timeline 시각화 생성.
-        
+
         Args:
             mmms_result: Stage1 예측 결과
-            suspicious_intervals: 의심 구간 리스트
+            suspicious_intervals: 음소 필터링된 의심 구간 리스트 (PIA 분석용)
             features: 추출된 특징 (frames_10fps 포함)
             video_path: 비디오 경로
             output_dir: 출력 디렉토리
-            
+            all_suspicious_intervals: 필터링 전 모든 의심 구간 (phoneme_valid 플래그 포함)
+
         Returns:
             시각화 파일 경로
         """
         video_name = Path(video_path).stem
         output_path = Path(output_dir) / f"{video_name}_stage1_timeline.png"
-        
+
         # 데이터 추출
         frame_probs = mmms_result.get('frame_probs', [])
         if len(frame_probs) == 0:
             logger.warning("No frame probabilities for timeline visualization")
             return str(output_path)
-        
+
         timestamps_10fps = features.get('timestamps_30fps', [])[::3]  # 10fps
         if len(timestamps_10fps) != len(frame_probs):
             # 길이 맞추기
             min_len = min(len(timestamps_10fps), len(frame_probs))
             timestamps_10fps = timestamps_10fps[:min_len]
             frame_probs = frame_probs[:min_len]
-        
+
         timestamps = np.array(timestamps_10fps)
         fake_probs = np.array(frame_probs)
         threshold = mmms_result.get('threshold')
         if threshold is None:
             threshold = max(float(np.mean(fake_probs)) * 0.8, 0.5)
-        
+
         # 프레임 가져오기 (10fps)
         frames_10fps = features.get('frames_10fps', [])
         if len(frames_10fps) == 0:
             logger.warning("No frames for timeline visualization")
             return str(output_path)
-        
+
         # 시각화 생성
         fig = plt.figure(figsize=(16, 10))
         gs = gridspec.GridSpec(3, 1, height_ratios=[2, 1.5, 0.5], hspace=0.3)
-        
+
         # Row 1: Sample Frames
         ax_frames = fig.add_subplot(gs[0])
         num_sample = 6
         frame_indices = np.linspace(0, len(frames_10fps)-1, num_sample, dtype=int)
-        
+
         montage_frames = []
         for idx in frame_indices:
             frame = frames_10fps[idx]  # (224, 224, 3), [0, 1]
@@ -531,64 +635,93 @@ class HybridXAIPipeline:
             color = (255, 0, 0) if prob > threshold else (0, 255, 0)
             cv2.putText(frame_uint8, f"P(Fake)={prob:.2f}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
             montage_frames.append(frame_uint8)
-        
+
         montage = np.concatenate(montage_frames, axis=1)
         ax_frames.imshow(montage)
         ax_frames.axis('off')
-        ax_frames.set_title(f"Video: {video_name} | Duration: {timestamps[-1]:.2f}s ({len(frames_10fps)} frames)", 
+        ax_frames.set_title(f"Video: {video_name} | Duration: {timestamps[-1]:.2f}s ({len(frames_10fps)} frames)",
                            fontsize=14, fontweight='bold')
-        
+
         # Row 2: Temporal Probability Graph
         ax_graph = fig.add_subplot(gs[1])
         ax_graph.plot(timestamps, fake_probs * 100, 'b-', linewidth=2, label='Fake Probability')
         ax_graph.axhline(y=threshold * 100, color='r', linestyle='--', linewidth=2, label=f'Threshold ({threshold*100:.0f}%)')
-        
-        # 의심 구간 하이라이트
-        for interval in suspicious_intervals:
+
+        # [MODIFIED] 의심 구간 하이라이트 (모든 구간 표시, 음소 유무에 따라 색상 구분)
+        # all_suspicious_intervals가 있으면 사용, 없으면 suspicious_intervals 사용
+        intervals_to_display = all_suspicious_intervals if all_suspicious_intervals else suspicious_intervals
+
+        valid_shown = False
+        invalid_shown = False
+        for interval in intervals_to_display:
             start = interval['start']
             end = interval['end']
-            ax_graph.axvspan(start, end, alpha=0.3, color='red', label='Suspicious Interval' if suspicious_intervals.index(interval) == 0 else '')
-        
+            is_valid = interval.get('phoneme_valid', True)  # 플래그 없으면 valid로 간주
+
+            if is_valid:
+                # 빨강: 음소 충분 (PIA 분석 대상)
+                color = 'red'
+                alpha = 0.3
+                label = 'Suspicious (PIA)' if not valid_shown else ''
+                valid_shown = True
+            else:
+                # 주황: 음소 부족 (PIA 분석 제외)
+                color = 'orange'
+                alpha = 0.2
+                label = 'Suspicious (No Phoneme)' if not invalid_shown else ''
+                invalid_shown = True
+
+            ax_graph.axvspan(start, end, alpha=alpha, color=color, label=label)
+
         ax_graph.set_xlabel('Time (seconds)', fontsize=12, fontweight='bold')
         ax_graph.set_ylabel('Fake Probability (%)', fontsize=12, fontweight='bold')
-        ax_graph.set_title(f"MMMS-BA Frame-Level Fake Probability | Video: {video_name}", 
+        ax_graph.set_title(f"MMMS-BA Frame-Level Fake Probability | Video: {video_name}",
                           fontsize=14, fontweight='bold')
         ax_graph.set_ylim(0, 100)
         ax_graph.grid(True, alpha=0.3)
         ax_graph.legend(loc='upper right')
-        
+
         # Row 3: Statistics
         ax_stats = fig.add_subplot(gs[2])
         ax_stats.axis('off')
+
+        # [MODIFIED] 통계에 음소 커버리지 정보 추가
+        total_intervals = len(intervals_to_display) if intervals_to_display else 0
+        valid_intervals = len([i for i in intervals_to_display if i.get('phoneme_valid', True)]) if intervals_to_display else 0
+
         stats_text = (
-            f"Suspicious Intervals: {len(suspicious_intervals)} | "
+            f"Suspicious Intervals: {total_intervals} (PIA: {valid_intervals}, No Phoneme: {total_intervals - valid_intervals}) | "
             f"Mean P(Fake): {np.mean(fake_probs)*100:.1f}% | "
             f"Max P(Fake): {np.max(fake_probs)*100:.1f}% | "
             f"Suspicious Frames: {np.sum(fake_probs > threshold)}/{len(fake_probs)}"
         )
-        ax_stats.text(0.5, 0.5, stats_text, ha='center', va='center', fontsize=11, 
+        ax_stats.text(0.5, 0.5, stats_text, ha='center', va='center', fontsize=11,
                      bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-        
+
         plt.tight_layout()
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         plt.close()
-        
+
         return str(output_path)
     
     def _visualize_pia_result(
         self,
         pia_result: Dict[str, Any],
         video_path: str,
-        output_dir: str
+        output_dir: str,
+        final_detection: Optional[Dict[str, Any]] = None,
+        korean_transcription: Optional[str] = None
     ) -> str:
         """
         PIA XAI 결과 시각화 생성.
-        
+
         Args:
             pia_result: PIA XAI 결과 (predict_full_video 결과)
             video_path: 비디오 경로
             output_dir: 출력 디렉토리
-            
+            final_detection: 최종 앙상블 결과 (Detection Summary용)
+            korean_transcription: WhisperX 한글 전사 결과 (단어 레벨 필터링됨)
+
         Returns:
             시각화 파일 경로
         """
@@ -597,16 +730,8 @@ class HybridXAIPipeline:
 
         visualizer = PIAVisualizer(dpi=150)
 
-        # Extract transcription - prefer all_phonemes (full sequence), fallback to matched_phonemes
-        transcription = ""
-        all_phonemes = pia_result.get('all_phonemes', [])
-        if all_phonemes:
-            transcription = mfa_to_korean(all_phonemes)
-        else:
-            # Fallback to matched_phonemes (14 representative phonemes)
-            matched_phonemes = pia_result.get('matched_phonemes', [])
-            if matched_phonemes:
-                transcription = mfa_to_korean(matched_phonemes)
+        # [FIX 1] 한글 transcription 사용 (단어 레벨 필터링된 결과)
+        transcription = korean_transcription or ""
 
         # Get time range from interval info
         time_range = ""
@@ -618,33 +743,45 @@ class HybridXAIPipeline:
 
         # 2x2 패널 생성
         fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-        fig.suptitle(f"PIA XAI Analysis | Video: {video_name}", fontsize=14, fontweight='bold')
 
-        # Add transcription subtitle if available
+        # 제목 위치 명시적 지정 (y=0.99, 최상단)
+        fig.suptitle(f"PIA XAI Analysis | Video: {video_name}", fontsize=14, fontweight='bold', y=0.99)
+
+        # Transcription 자막 위치 조정 (제목 아래 여유 확보)
         if transcription:
             subtitle = f"의심 구간 {time_range} 음성: '{transcription}'" if time_range else f"음성: '{transcription}'"
-            fig.text(0.5, 0.96, subtitle, ha='center', fontsize=11, style='italic', color='#333333')
-        
+            fig.text(0.5, 0.95, subtitle, ha='center', fontsize=11, style='italic', color='#333333')
+
         # Panel 1: Geometry Analysis (가장 중요)
         if 'geometry_analysis' in pia_result:
             visualizer.plot_geometry_analysis(pia_result, ax=axes[0, 0], title="MAR Deviation Analysis")
-        
+
         # Panel 2: Phoneme Attention
         if 'phoneme_analysis' in pia_result:
             visualizer.plot_phoneme_attention(pia_result, ax=axes[0, 1], title="Phoneme Attention")
-        
+
         # Panel 3: Branch Contributions
         if 'model_info' in pia_result and 'branch_contributions' in pia_result['model_info']:
             visualizer.plot_branch_contributions(pia_result, ax=axes[1, 0], title="Branch Contributions")
-        
-        # Panel 4: Detection Summary
-        if 'detection' in pia_result:
-            visualizer.plot_detection_summary(pia_result, ax=axes[1, 1], title="Detection Summary")
-        
-        plt.tight_layout()
+
+        # [FIX 2] Panel 4: Detection Summary - 최종 앙상블 결과 사용
+        # final_detection이 있으면 앙상블 결과를, 없으면 PIA 결과를 표시
+        # Note: plot_detection_summary()는 result['detection']으로 접근하므로 래핑 필요
+        if final_detection:
+            detection_result = {
+                'detection': final_detection,
+                'video_info': pia_result.get('video_info', {}),
+                'summary': {}  # Detection Summary 패널에서는 사용 안함
+            }
+        else:
+            detection_result = pia_result
+        visualizer.plot_detection_summary(detection_result, ax=axes[1, 1], title="Detection Summary")
+
+        # tight_layout에 상단 여백 확보 (제목 + 자막 공간)
+        plt.tight_layout(rect=[0, 0, 1, 0.93])
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         plt.close()
-        
+
         return str(output_path)
 
 
@@ -658,7 +795,7 @@ def main():
                         default='models/checkpoints/mmms-ba_fulldata_best.pth',
                         help='MMMS-BA model checkpoint')
     parser.add_argument('--pia-model', type=str,
-                        default='F:/preprocessed_data_pia_optimized/checkpoints/best.pth',
+                        default='models/checkpoints/pia-best.pth',
                         help='PIA model checkpoint')
     parser.add_argument('--output-dir', type=str, default='outputs/hybrid_xai', help='Output directory')
     parser.add_argument('--device', type=str, default='cuda', help='Device (cuda/cpu)')
