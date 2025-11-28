@@ -114,7 +114,7 @@ IMAGE_SIZE = (112, 112)
 # Map MFA phoneme codes to Korean characters for user-friendly display
 PHONEME_TO_KOREAN = {
     # Existing KEEP_PHONEMES (14)
-    'A': 'ㅏ', 'E': 'ㅔ', 'I': 'ㅣ', 'O': 'ㅗ', 'U': 'ㅜ',
+    'A': 'ㅏ', 'E': 'ㅔ/ㅐ', 'I': 'ㅣ', 'O': 'ㅗ', 'U': 'ㅜ',
     'EU': 'ㅡ', 'EO': 'ㅓ',
     'M': 'ㅁ', 'B': 'ㅂ', 'BB': 'ㅃ', 'Ph': 'ㅍ',
     'CHh': 'ㅊ',

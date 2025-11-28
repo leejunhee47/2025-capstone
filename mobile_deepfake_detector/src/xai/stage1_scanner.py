@@ -10,6 +10,16 @@ from ..utils.config import load_config
 # Setup logger
 logger = logging.getLogger(__name__)
 
+# ========================================
+# Persistence-based Suspicious Interval Detection
+# ========================================
+# 지속성 기반 의심구간 탐지 파라미터
+# - Fake: plateau 패턴 (높은 값 연속 유지)
+# - Real: spiky 패턴 (빠른 상승/하락)
+# - 연속 N프레임 이상 threshold 초과 시 의심구간으로 판정
+PERSISTENCE_THRESHOLD = 0.6       # 고정 threshold (Real 스파이크 필터링)
+MIN_CONSECUTIVE_FRAMES = 20       # 최소 연속 프레임 (2초 at 10fps, 엄격한 설정)
+
 class Stage1Scanner:
     def __init__(
         self,
@@ -134,7 +144,8 @@ class Stage1Scanner:
             },
             'frame_probs': fake_probs,
             'mean_fake_prob': mean_fake_prob,
-            'threshold': mean_fake_prob * 0.8 if mean_fake_prob >= 0.5 else None
+            'threshold': PERSISTENCE_THRESHOLD,  # 고정 threshold 사용
+            'min_consecutive_frames': MIN_CONSECUTIVE_FRAMES
         }
 
     def find_suspicious_intervals(
@@ -145,25 +156,25 @@ class Stage1Scanner:
         max_candidates: int = 10,
         min_duration: float = 3.0,  # 최소 3초 이상 확보 (PIA phoneme coverage 보장)
         merge_gap: float = 1.0,
-        padding_sec: float = 0.5  # [NEW] Interval에 앞뒤 패딩 추가 (phoneme coverage 증가)
+        padding_sec: float = 0.5  # Interval에 앞뒤 패딩 추가 (phoneme coverage 증가)
     ) -> List[Dict[str, Any]]:
         """
-        Min/Max Candidates 전략으로 의심 구간 추출.
+        지속성 기반 의심구간 탐지 (Persistence-based Detection).
 
-        Strategy:
-        - 영상 길이 무관하게 안정적 개수 (5~10개)
-        - Relative threshold (상대적 percentile)
-        - Consecutive grouping + Merge
-        - 안전장치: 200 프레임 이하 짧은 영상 대응
+        핵심 아이디어:
+        - Fake 영상: plateau 패턴 (높은 값이 연속 유지)
+        - Real 영상: spiky 패턴 (빠르게 상승 후 급하강)
+        - 고정 threshold (0.6) + 최소 연속 프레임 조건 (20프레임 = 2초)으로
+          스파이크 필터링, plateau만 의심구간으로 선정
 
         Args:
             frame_probs: MMMS-BA frame-level fake probabilities (T,)
             timestamps: Corresponding timestamps in seconds (T,)
-            min_candidates: 최소 구간 개수 (짧은 영상 대응)
-            max_candidates: 최대 구간 개수 (긴 영상 과다 방지)
+            min_candidates: (unused in persistence mode)
+            max_candidates: 최대 구간 개수
             min_duration: 최소 구간 길이 (초)
             merge_gap: 이 시간(초) 이내 구간 병합
-            padding_sec: Interval 앞뒤 패딩 (초) - phoneme coverage 증가
+            padding_sec: Interval 앞뒤 패딩 (초)
 
         Returns:
             List of intervals sorted by mean_prob descending:
@@ -173,7 +184,8 @@ class Stage1Scanner:
                     'end': 5.8,
                     'mean_prob': 0.92,
                     'duration': 2.6,
-                    'interval_id': 'interval_001'
+                    'interval_id': 'interval_001',
+                    'frame_count': 26
                 },
                 ...
             ]
@@ -184,56 +196,54 @@ class Stage1Scanner:
             logger.warning("No frames for suspicious interval detection")
             return []
 
-        # Step 1: 동적 Percentile 계산 with 안전장치
-        raw_target = total_frames // 40  # 20초 영상(200 frames) → 5개
         mean_prob = float(np.mean(frame_probs))
-        if mean_prob < 0.5:
-            logger.info(f"Mean fake probability {mean_prob:.3f} < 0.5 (likely real). Skipping interval detection.")
-            return []
+        max_prob = float(np.max(frame_probs))
 
-        absolute_threshold = max(0.0, min(1.0, mean_prob * 0.8))
-        threshold = absolute_threshold
+        logger.info(f"[Stage1] Persistence-based suspicious interval detection:")
+        logger.info(f"  Total frames: {total_frames}, Mean P(Fake): {mean_prob:.3f}, Max P(Fake): {max_prob:.3f}")
+        logger.info(f"  Threshold: {PERSISTENCE_THRESHOLD}, Min consecutive frames: {MIN_CONSECUTIVE_FRAMES}")
 
-        logger.info(f"[Stage1] Finding suspicious intervals with absolute threshold:")
-        logger.info(f"  Total frames: {total_frames}, Mean fake prob: {mean_prob:.3f}")
-        logger.info(f"  Threshold: {threshold:.3f}")
+        # Step 1: 고정 threshold로 마스크 생성
+        high_prob_mask = frame_probs >= PERSISTENCE_THRESHOLD
 
-        # Step 2: Consecutive Grouping
-        high_prob_mask = frame_probs >= threshold
-
-        # Find change points
+        # Step 2: 연속 구간 찾기 (numpy diff 기반)
         padded = np.concatenate([[False], high_prob_mask, [False]])
         diff = np.diff(padded.astype(int))
         starts = np.where(diff == 1)[0]
         ends = np.where(diff == -1)[0]
 
         if len(starts) == 0 or len(ends) == 0:
-            logger.warning("No high probability regions found")
+            logger.info(f"  No frames exceed threshold {PERSISTENCE_THRESHOLD}")
             return []
 
-        # Step 3: Create initial intervals
+        # Step 3: 지속성 조건으로 필터링 (최소 N프레임 연속)
         intervals = []
         for start_idx, end_idx in zip(starts, ends):
-            start_time = float(timestamps[start_idx])
-            end_time = float(timestamps[end_idx - 1])  # end_idx는 exclusive
-            duration = end_time - start_time
+            frame_count = end_idx - start_idx
 
-            mean_prob = float(np.mean(frame_probs[start_idx:end_idx]))
+            # 지속성 조건: 최소 MIN_CONSECUTIVE_FRAMES 연속
+            if frame_count >= MIN_CONSECUTIVE_FRAMES:
+                start_time = float(timestamps[start_idx])
+                end_time = float(timestamps[min(end_idx - 1, len(timestamps) - 1)])
+                duration = end_time - start_time
+                interval_mean_prob = float(np.mean(frame_probs[start_idx:end_idx]))
 
-            intervals.append({
-                'start': start_time,
-                'end': end_time,
-                'duration': duration,
-                'mean_prob': mean_prob,
-                'start_idx': start_idx,
-                'end_idx': end_idx
-            })
+                intervals.append({
+                    'start': start_time,
+                    'end': end_time,
+                    'duration': duration,
+                    'mean_prob': interval_mean_prob,
+                    'start_idx': start_idx,
+                    'end_idx': end_idx,
+                    'frame_count': frame_count
+                })
 
         if len(intervals) == 0:
-            logger.warning("No intervals created")
+            # 지속성 조건을 충족하는 구간 없음 → Real 영상으로 추정
+            logger.info(f"  No intervals with {MIN_CONSECUTIVE_FRAMES}+ consecutive frames (likely Real)")
             return []
 
-        # Step 4: Merge nearby intervals
+        # Step 4: 인접 구간 병합 (merge_gap 이내)
         merged_intervals = []
         current = intervals[0]
 
@@ -245,93 +255,37 @@ class Stage1Scanner:
                 current['end'] = next_interval['end']
                 current['duration'] = current['end'] - current['start']
                 current['end_idx'] = next_interval['end_idx']
-
-                # Recalculate mean_prob
+                current['frame_count'] = current['end_idx'] - current['start_idx']
                 current['mean_prob'] = float(
                     np.mean(frame_probs[current['start_idx']:current['end_idx']])
                 )
             else:
-                # Save current and move to next
                 merged_intervals.append(current)
                 current = next_interval
 
-        # Add last interval
         merged_intervals.append(current)
 
-        # Step 4.5: 짧은 구간 병합 → 최소 3초 확보 (PIA phoneme coverage 보장)
-        SHORT_THRESHOLD = 1.0
-        TARGET_MERGE_DURATION = max(min_duration, 3.0)
-
-        enhanced_intervals = []
-        i = 0
-        while i < len(merged_intervals):
-            current_interval = merged_intervals[i]
-
-            # 짧은 구간이면 인접 구간들과 병합 시도
-            if current_interval['duration'] < SHORT_THRESHOLD:
-                # 앞/뒤 구간과 병합하여 1초 이상 만들기
-                merge_candidates = [current_interval]
-                accumulated_duration = current_interval['duration']
-
-                # 앞으로 탐색
-                j = i - 1
-                while j >= 0 and accumulated_duration < TARGET_MERGE_DURATION:
-                    if merged_intervals[j] not in [x for sublist in [m['merged_from'] if 'merged_from' in m else [m] for m in enhanced_intervals] for x in sublist]:
-                        merge_candidates.insert(0, merged_intervals[j])
-                        accumulated_duration += merged_intervals[j]['duration']
-                    j -= 1
-
-                # 뒤로 탐색
-                j = i + 1
-                while j < len(merged_intervals) and accumulated_duration < TARGET_MERGE_DURATION:
-                    merge_candidates.append(merged_intervals[j])
-                    accumulated_duration += merged_intervals[j]['duration']
-                    j += 1
-
-                # 병합 수행
-                if len(merge_candidates) > 1:
-                    merged = {
-                        'start': merge_candidates[0]['start'],
-                        'end': merge_candidates[-1]['end'],
-                        'duration': merge_candidates[-1]['end'] - merge_candidates[0]['start'],
-                        'start_idx': merge_candidates[0]['start_idx'],
-                        'end_idx': merge_candidates[-1]['end_idx'],
-                        'merged_from': merge_candidates
-                    }
-                    # Recalculate mean_prob
-                    merged['mean_prob'] = float(
-                        np.mean(frame_probs[merged['start_idx']:merged['end_idx']])
-                    )
-                    enhanced_intervals.append(merged)
-                    i = i + len([m for m in merge_candidates if m['start'] >= current_interval['start']])
-                else:
-                    enhanced_intervals.append(current_interval)
-                    i += 1
-            else:
-                enhanced_intervals.append(current_interval)
-                i += 1
-
-        # Step 5: Filter by min_duration
+        # Step 5: min_duration 필터링
         filtered_intervals = [
-            interval for interval in enhanced_intervals
+            interval for interval in merged_intervals
             if interval['duration'] >= min_duration
         ]
 
         if len(filtered_intervals) == 0:
-            logger.warning(f"No intervals >= {min_duration}s duration")
-            # Fallback: return top interval regardless of duration
-            filtered_intervals = sorted(merged_intervals, key=lambda x: x['mean_prob'], reverse=True)[:1]
+            logger.warning(f"No intervals >= {min_duration}s duration after persistence filter")
+            # Fallback: 가장 긴 구간 하나 선택
+            if merged_intervals:
+                filtered_intervals = sorted(merged_intervals, key=lambda x: x['frame_count'], reverse=True)[:1]
 
-        # Step 6: Sort by mean_prob and select top N
+        # Step 6: mean_prob 기준 정렬 및 top N 선택
         filtered_intervals.sort(key=lambda x: x['mean_prob'], reverse=True)
         top_intervals = filtered_intervals[:max_candidates]
 
-        # Step 7: Add padding and interval_id
-        # [NEW] 0.5초 패딩으로 phoneme coverage 증가 (짧은 구간 보완)
+        # Step 7: 패딩 추가 및 interval_id 부여
         video_duration = float(timestamps[-1])
         final_intervals = []
+
         for i, interval in enumerate(top_intervals):
-            # Apply padding with video boundary check
             padded_start = max(0.0, interval['start'] - padding_sec)
             padded_end = min(video_duration, interval['end'] + padding_sec)
 
@@ -341,13 +295,14 @@ class Stage1Scanner:
                 'mean_prob': interval['mean_prob'],
                 'duration': padded_end - padded_start,
                 'interval_id': f'interval_{i+1:03d}',
-                'original_start': interval['start'],  # 디버깅용
+                'frame_count': interval['frame_count'],
+                'original_start': interval['start'],
                 'original_end': interval['end']
             })
 
-        logger.info(f"  Found {len(final_intervals)} suspicious intervals")
-        for i, interval in enumerate(final_intervals[:3]):  # Log top 3
+        logger.info(f"  Found {len(final_intervals)} suspicious intervals (persistence-based)")
+        for i, interval in enumerate(final_intervals[:3]):
             logger.info(f"    #{i+1}: {interval['start']:.1f}~{interval['end']:.1f}s "
-                       f"(prob={interval['mean_prob']:.3f}, dur={interval['duration']:.1f}s)")
+                       f"(prob={interval['mean_prob']:.3f}, dur={interval['duration']:.1f}s, frames={interval['frame_count']})")
 
         return final_intervals

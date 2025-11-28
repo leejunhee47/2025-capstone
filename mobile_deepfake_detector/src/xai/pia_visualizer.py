@@ -75,7 +75,7 @@ class PIAVisualizer:
         # Korean phoneme to Korean character mapping
         self.phoneme_to_korean = {
             'A': 'ㅏ', 'B': 'ㅂ', 'BB': 'ㅃ', 'CHh': 'ㅊ',
-            'E': 'ㅔ', 'EU': 'ㅡ', 'I': 'ㅣ', 'M': 'ㅁ',
+            'E': 'ㅔ/ㅐ', 'EU': 'ㅡ', 'I': 'ㅣ', 'M': 'ㅁ',
             'O': 'ㅗ', 'Ph': 'ㅍ', 'U': 'ㅜ',
             'iA': 'ㅑ', 'iO': 'ㅛ', 'iU': 'ㅠ'
         }
@@ -798,3 +798,343 @@ class PIAVisualizer:
         print(f"{'='*80}\n")
 
         return figures
+
+    def plot_geometry_analysis_30fps(
+        self,
+        features: Dict[str, Any],
+        suspicious_intervals: List[Dict],
+        geometry_analysis: Dict[str, Any],
+        ax: Optional[plt.Axes] = None,
+        title: Optional[str] = None
+    ) -> plt.Figure:
+        """
+        Plot MAR analysis using full 30fps data within suspicious intervals.
+
+        Instead of using 14×5=70 frames from PIA model, uses all frames from
+        suspicious intervals and groups them by phoneme.
+
+        Args:
+            features: 30fps feature dict containing:
+                - mar_30fps: (T,) MAR values
+                - phoneme_labels_30fps: (T,) phoneme labels
+                - timestamps_30fps: (T,) timestamps
+            suspicious_intervals: List of suspicious interval dicts with start/end times
+            geometry_analysis: Original PIA geometry analysis for baseline info
+            ax: Matplotlib axes
+            title: Plot title
+
+        Returns:
+            Matplotlib figure
+        """
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(14, 8))
+        else:
+            fig = ax.figure
+
+        # Extract 30fps data
+        mar_30fps = features.get('mar_30fps', np.array([]))
+        phoneme_labels_30fps = features.get('phoneme_labels_30fps', np.array([]))
+        timestamps_30fps = features.get('timestamps_30fps', np.array([]))
+
+        if len(mar_30fps) == 0 or len(phoneme_labels_30fps) == 0:
+            ax.text(0.5, 0.5, 'No 30fps data available', ha='center', va='center',
+                   fontsize=14, transform=ax.transAxes)
+            ax.set_title(title or 'MAR Deviation Analysis (No Data)', fontsize=14, weight='bold')
+            return fig
+
+        # Get suspicious interval mask (combine all intervals)
+        if suspicious_intervals and len(suspicious_intervals) > 0:
+            interval_mask = np.zeros(len(timestamps_30fps), dtype=bool)
+            for interval in suspicious_intervals:
+                start = interval.get('start', 0)
+                end = interval.get('end', timestamps_30fps[-1] if len(timestamps_30fps) > 0 else 0)
+                interval_mask |= (timestamps_30fps >= start) & (timestamps_30fps <= end)
+        else:
+            # No intervals: use full video
+            interval_mask = np.ones(len(timestamps_30fps), dtype=bool)
+
+        # Filter data to suspicious intervals
+        mar_interval = mar_30fps[interval_mask]
+        phoneme_interval = phoneme_labels_30fps[interval_mask]
+
+        # Get phoneme vocab (14 Korean phonemes)
+        phoneme_vocab = get_phoneme_vocab()
+        skip_tokens = {'<pad>', '<PAD>', '<unk>', '<UNK>', '', 'sil', 'sp', 'spn'}
+
+        # Calculate per-phoneme MAR statistics
+        phoneme_mar_stats = {}
+        for phoneme in phoneme_vocab:
+            mask = phoneme_interval == phoneme
+            if np.sum(mask) > 0:
+                mar_values = mar_interval[mask]
+                phoneme_mar_stats[phoneme] = {
+                    'mean': float(np.mean(mar_values)),
+                    'std': float(np.std(mar_values)),
+                    'count': int(np.sum(mask)),
+                    'min': float(np.min(mar_values)),
+                    'max': float(np.max(mar_values))
+                }
+
+        # Calculate in-video baseline
+        valid_mar = mar_interval[~np.isin(phoneme_interval, list(skip_tokens))]
+        if len(valid_mar) > 0:
+            video_mean = float(np.mean(valid_mar))
+            video_std = float(np.std(valid_mar)) if len(valid_mar) > 1 else 0.1
+        else:
+            video_mean = 0.5
+            video_std = 0.1
+
+        # Prepare visualization data
+        phoneme_names = []
+        measured_mar = []
+        mar_stds = []
+        frame_counts = []
+        colors = []
+
+        effective_std = max(video_std, 0.05)  # Minimum threshold for stability
+
+        for phoneme in phoneme_vocab:
+            phoneme_kr = phoneme_to_korean(phoneme)
+            phoneme_names.append(phoneme_kr)
+
+            if phoneme in phoneme_mar_stats:
+                stats = phoneme_mar_stats[phoneme]
+                measured_mar.append(stats['mean'])
+                mar_stds.append(stats['std'])
+                frame_counts.append(stats['count'])
+
+                # Calculate z-score for abnormality coloring
+                z_score = abs(stats['mean'] - video_mean) / effective_std
+
+                if z_score > 3:
+                    colors.append('#d32f2f')  # Critical - dark red
+                elif z_score > 2:
+                    colors.append('#ff6f00')  # High - orange
+                elif z_score > 1.5:
+                    colors.append('#fbc02d')  # Medium - yellow
+                else:
+                    colors.append('#4caf50')  # Normal - green
+            else:
+                # No frames for this phoneme
+                measured_mar.append(0)
+                mar_stds.append(0)
+                frame_counts.append(0)
+                colors.append('#9e9e9e')  # Gray for missing
+
+        # Create bar chart
+        x_pos = np.arange(len(phoneme_names))
+        width = 0.6
+
+        # Draw bars with error bars
+        bars = ax.bar(x_pos, measured_mar, width, color=colors, alpha=0.7,
+                     edgecolor='black', linewidth=1)
+
+        # Add error bars for std
+        ax.errorbar(x_pos, measured_mar, yerr=mar_stds, fmt='none',
+                   ecolor='black', capsize=3, capthick=1, alpha=0.6)
+
+        # Add baseline mean line
+        ax.axhline(y=video_mean, color='blue', linestyle='--', linewidth=2,
+                  label=f'영상 평균 (mean={video_mean:.3f})')
+
+        # Add ±2 std range
+        ax.axhline(y=video_mean + 2*effective_std, color='red', linestyle=':',
+                  linewidth=1.5, alpha=0.7, label=f'+2σ ({video_mean + 2*effective_std:.3f})')
+        ax.axhline(y=video_mean - 2*effective_std, color='red', linestyle=':',
+                  linewidth=1.5, alpha=0.7, label=f'-2σ ({max(0, video_mean - 2*effective_std):.3f})')
+
+        # Add frame count annotations
+        for i, (bar, count) in enumerate(zip(bars, frame_counts)):
+            if count > 0:
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                       f'n={count}', ha='center', va='bottom', fontsize=8, alpha=0.7)
+
+        # Formatting
+        ax.set_xlabel('음소 (Phoneme)', fontsize=12, fontweight='bold')
+        ax.set_ylabel('MAR 값 (Mouth Aspect Ratio)', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(phoneme_names, rotation=0, ha='center', fontsize=10)
+        ax.grid(True, alpha=0.3, axis='y')
+        ax.set_ylim(0, max(measured_mar) * 1.2 + 0.1 if measured_mar else 1.0)
+
+        # Legend
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor='#4caf50', alpha=0.7, label='정상 (|z|<1.5)'),
+            Patch(facecolor='#fbc02d', alpha=0.7, label='경미 (1.5≤|z|<2)'),
+            Patch(facecolor='#ff6f00', alpha=0.7, label='높음 (2≤|z|<3)'),
+            Patch(facecolor='#d32f2f', alpha=0.7, label='심각 (|z|≥3)'),
+            Patch(facecolor='#9e9e9e', alpha=0.7, label='없음'),
+        ]
+        ax.legend(handles=legend_elements, loc='upper right', fontsize=8)
+
+        # Title with interval info
+        if suspicious_intervals and len(suspicious_intervals) > 0:
+            interval_str = ', '.join([f"{i['start']:.1f}~{i['end']:.1f}s"
+                                      for i in suspicious_intervals[:3]])
+            if title is None:
+                title = f'MAR 편차 분석 (의심 구간: {interval_str})'
+        else:
+            if title is None:
+                title = 'MAR 편차 분석 (전체 영상)'
+
+        ax.set_title(title, fontsize=14, weight='bold', pad=15)
+
+        # Stats text box
+        total_frames = sum(frame_counts)
+        stats_text = f"분석 프레임: {total_frames}\n영상 평균: {video_mean:.3f}\n표준편차: {video_std:.3f}"
+        ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
+               fontsize=9, verticalalignment='top',
+               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+        plt.tight_layout()
+        return fig
+
+    def plot_phoneme_attention_30fps(
+        self,
+        features: Dict[str, Any],
+        suspicious_intervals: List[Dict],
+        phoneme_analysis: Dict[str, Any],
+        ax: Optional[plt.Axes] = None,
+        title: Optional[str] = None,
+        top_n: int = 14
+    ) -> plt.Figure:
+        """
+        Plot phoneme attention based on frame counts in suspicious intervals.
+
+        Instead of using model attention weights, shows phoneme distribution
+        within suspicious intervals.
+
+        Args:
+            features: 30fps feature dict
+            suspicious_intervals: List of suspicious interval dicts
+            phoneme_analysis: Original PIA phoneme analysis (for attention weights if available)
+            ax: Matplotlib axes
+            title: Plot title
+            top_n: Number of phonemes to show
+
+        Returns:
+            Matplotlib figure
+        """
+        if ax is None:
+            fig, ax = plt.subplots(figsize=self.figsize)
+        else:
+            fig = ax.figure
+
+        # Extract 30fps data
+        phoneme_labels_30fps = features.get('phoneme_labels_30fps', np.array([]))
+        timestamps_30fps = features.get('timestamps_30fps', np.array([]))
+
+        if len(phoneme_labels_30fps) == 0:
+            ax.text(0.5, 0.5, 'No phoneme data available', ha='center', va='center',
+                   fontsize=14, transform=ax.transAxes)
+            ax.set_title(title or 'Phoneme Attention (No Data)', fontsize=14, weight='bold')
+            return fig
+
+        # Get suspicious interval mask
+        if suspicious_intervals and len(suspicious_intervals) > 0:
+            interval_mask = np.zeros(len(timestamps_30fps), dtype=bool)
+            for interval in suspicious_intervals:
+                start = interval.get('start', 0)
+                end = interval.get('end', timestamps_30fps[-1] if len(timestamps_30fps) > 0 else 0)
+                interval_mask |= (timestamps_30fps >= start) & (timestamps_30fps <= end)
+        else:
+            interval_mask = np.ones(len(timestamps_30fps), dtype=bool)
+
+        phoneme_interval = phoneme_labels_30fps[interval_mask]
+
+        # Count phoneme occurrences
+        phoneme_vocab = get_phoneme_vocab()
+        skip_tokens = {'<pad>', '<PAD>', '<unk>', '<UNK>', '', 'sil', 'sp', 'spn'}
+
+        phoneme_counts = {}
+        total_valid = 0
+        for phoneme in phoneme_vocab:
+            count = int(np.sum(phoneme_interval == phoneme))
+            if count > 0:
+                phoneme_counts[phoneme] = count
+                total_valid += count
+
+        if total_valid == 0:
+            ax.text(0.5, 0.5, 'No valid phonemes in intervals', ha='center', va='center',
+                   fontsize=14, transform=ax.transAxes)
+            ax.set_title(title or 'Phoneme Attention (No Phonemes)', fontsize=14, weight='bold')
+            return fig
+
+        # Get PIA model attention weights if available
+        model_attention = {}
+        if phoneme_analysis and 'phoneme_scores' in phoneme_analysis:
+            for p in phoneme_analysis['phoneme_scores']:
+                phoneme_mfa = p.get('phoneme_mfa', p.get('phoneme', ''))
+                model_attention[phoneme_mfa] = p.get('score', 0)
+
+        # Prepare data: combine frame count (exposure) with model attention
+        phoneme_data = []
+        for phoneme, count in phoneme_counts.items():
+            exposure = count / total_valid  # Frame proportion
+            attention = model_attention.get(phoneme, exposure)  # Use model attention if available
+            combined_score = 0.5 * exposure + 0.5 * attention  # Blend both metrics
+
+            phoneme_data.append({
+                'phoneme': phoneme,
+                'phoneme_kr': phoneme_to_korean(phoneme),
+                'count': count,
+                'exposure': exposure,
+                'attention': attention,
+                'score': combined_score
+            })
+
+        # Sort by combined score
+        sorted_data = sorted(phoneme_data, key=lambda x: x['score'], reverse=True)[:top_n]
+
+        # Prepare for plotting
+        phonemes = [f"{p['phoneme_kr']}\n({p['phoneme']})" for p in sorted_data]
+        scores = [p['score'] for p in sorted_data]
+        counts = [p['count'] for p in sorted_data]
+
+        # Color by score level
+        bar_colors = []
+        for p in sorted_data:
+            if p['score'] > 0.15:
+                bar_colors.append(self.colors['high'])
+            elif p['score'] > 0.08:
+                bar_colors.append(self.colors['medium'])
+            else:
+                bar_colors.append(self.colors['low'])
+
+        # Create horizontal bar chart
+        y_pos = np.arange(len(phonemes))
+        bars = ax.barh(y_pos, scores, color=bar_colors, edgecolor='black', linewidth=0.5)
+
+        # Add count annotations
+        for i, (bar, score, count) in enumerate(zip(bars, scores, counts)):
+            # Score label
+            ax.text(score + 0.005, i, f'{score:.4f}', va='center', fontsize=9, weight='bold')
+            # Count label inside bar
+            if bar.get_width() > 0.03:
+                ax.text(bar.get_width() * 0.5, i, f'n={count}', va='center', ha='center',
+                       fontsize=8, color='white', weight='bold')
+
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(phonemes)
+        ax.set_xlabel('Combined Score (Exposure + Attention)', fontsize=12, weight='bold')
+        ax.set_ylabel('Phoneme (음소)', fontsize=12, weight='bold')
+        ax.set_xlim(0, max(scores) * 1.2 if scores else 1.0)
+        ax.grid(axis='x', alpha=0.3, linestyle='--')
+
+        # Legend
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor=self.colors['high'], edgecolor='black', label='High (>0.15)'),
+            Patch(facecolor=self.colors['medium'], edgecolor='black', label='Medium (0.08-0.15)'),
+            Patch(facecolor=self.colors['low'], edgecolor='black', label='Low (<0.08)')
+        ]
+        ax.legend(handles=legend_elements, loc='lower right', fontsize=9)
+
+        # Title
+        if title is None:
+            title = f'음소별 Attention 분포 (의심 구간 {len(suspicious_intervals)}개)'
+        ax.set_title(title, fontsize=14, weight='bold', pad=15)
+
+        plt.tight_layout()
+        return fig

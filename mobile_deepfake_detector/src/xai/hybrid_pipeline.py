@@ -392,7 +392,9 @@ class HybridXAIPipeline:
                         video_path=local_video_path,
                         output_dir=output_dir,
                         final_detection=detection,  # 앙상블 결과 전달
-                        korean_transcription=korean_transcription  # 한글 전사 전달
+                        korean_transcription=korean_transcription,  # 한글 전사 전달
+                        features=features,  # [NEW] 30fps MAR 데이터용
+                        suspicious_intervals=suspicious_intervals  # [NEW] 의심 구간 정보
                     )
                     logger.info(f"Generated PIA XAI visualization: {pia_viz_path}")
             except Exception as e:
@@ -710,7 +712,9 @@ class HybridXAIPipeline:
         video_path: str,
         output_dir: str,
         final_detection: Optional[Dict[str, Any]] = None,
-        korean_transcription: Optional[str] = None
+        korean_transcription: Optional[str] = None,
+        features: Optional[Dict[str, Any]] = None,
+        suspicious_intervals: Optional[List[Dict]] = None
     ) -> str:
         """
         PIA XAI 결과 시각화 생성.
@@ -721,6 +725,8 @@ class HybridXAIPipeline:
             output_dir: 출력 디렉토리
             final_detection: 최종 앙상블 결과 (Detection Summary용)
             korean_transcription: WhisperX 한글 전사 결과 (단어 레벨 필터링됨)
+            features: 30fps 전체 특징 데이터 (mar_30fps, phoneme_labels_30fps 등)
+            suspicious_intervals: 의심 구간 리스트
 
         Returns:
             시각화 파일 경로
@@ -752,12 +758,30 @@ class HybridXAIPipeline:
             subtitle = f"의심 구간 {time_range} 음성: '{transcription}'" if time_range else f"음성: '{transcription}'"
             fig.text(0.5, 0.95, subtitle, ha='center', fontsize=11, style='italic', color='#333333')
 
-        # Panel 1: Geometry Analysis (가장 중요)
-        if 'geometry_analysis' in pia_result:
+        # Panel 1: Geometry Analysis (30fps MAR 데이터 사용)
+        # [NEW] features가 있으면 30fps MAR 기반 시각화, 없으면 기존 방식
+        if features is not None and 'mar_30fps' in features:
+            visualizer.plot_geometry_analysis_30fps(
+                features=features,
+                suspicious_intervals=suspicious_intervals,
+                geometry_analysis=pia_result.get('geometry_analysis', {}),
+                ax=axes[0, 0],
+                title="MAR Deviation Analysis"
+            )
+        elif 'geometry_analysis' in pia_result:
             visualizer.plot_geometry_analysis(pia_result, ax=axes[0, 0], title="MAR Deviation Analysis")
 
-        # Panel 2: Phoneme Attention
-        if 'phoneme_analysis' in pia_result:
+        # Panel 2: Phoneme Attention (의심 구간 기반)
+        # [NEW] features가 있으면 의심 구간 기반 어텐션 시각화
+        if features is not None and 'phoneme_labels_30fps' in features:
+            visualizer.plot_phoneme_attention_30fps(
+                features=features,
+                suspicious_intervals=suspicious_intervals,
+                phoneme_analysis=pia_result.get('phoneme_analysis', {}),
+                ax=axes[0, 1],
+                title="Phoneme Attention"
+            )
+        elif 'phoneme_analysis' in pia_result:
             visualizer.plot_phoneme_attention(pia_result, ax=axes[0, 1], title="Phoneme Attention")
 
         # Panel 3: Branch Contributions
