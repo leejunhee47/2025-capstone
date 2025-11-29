@@ -20,6 +20,7 @@ Usage:
 import json
 import hashlib
 import logging
+import platform
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -27,11 +28,20 @@ from typing import Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 
+def _get_default_cache_dir() -> Path:
+    """Get platform-specific default cache directory."""
+    if platform.system() == "Windows":
+        return Path("E:/capstone/mobile_deepfake_detector/cache/unified_features")
+    else:
+        # Linux (AWS EC2)
+        return Path("/home/ec2-user/2025-capstone/aimodel/mobile_deepfake_detector/cache/unified_features")
+
+
 class FeatureCache:
     """Video feature cache with NPZ storage."""
 
-    # Default cache directory
-    DEFAULT_CACHE_DIR = Path("E:/capstone/mobile_deepfake_detector/cache/unified_features")
+    # Default cache directory (platform-specific)
+    DEFAULT_CACHE_DIR = _get_default_cache_dir()
 
     def __init__(self, cache_dir: Optional[str] = None):
         """

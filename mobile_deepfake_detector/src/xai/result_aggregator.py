@@ -166,11 +166,13 @@ class ResultAggregator:
             # [우선순위 2] Interval info (MAR deviation 없을 때)
             elif 'best_interval' in pia_result:
                 interval = pia_result['best_interval']
-                phonemes = pia_result.get('matched_phonemes', [])[:3]
+                # Filter out <pad> tokens before selecting top phonemes
+                all_phonemes = pia_result.get('matched_phonemes', [])
+                valid_phonemes = [p for p in all_phonemes if p and p != '<pad>'][:3]
 
                 # [HYBRID] Convert MFA codes to Korean characters for UX
                 from ..utils.korean_phoneme_config import phoneme_to_korean
-                korean_phonemes = [phoneme_to_korean(p) for p in phonemes]
+                korean_phonemes = [phoneme_to_korean(p) for p in valid_phonemes]
                 phoneme_str = ', '.join(f"/{p}/" for p in korean_phonemes) if korean_phonemes else "여러 발음"
 
                 primary_reason = (
