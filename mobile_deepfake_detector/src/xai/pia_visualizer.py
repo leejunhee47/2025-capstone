@@ -95,7 +95,7 @@ class PIAVisualizer:
         elif system == 'Linux':
             # Linux: Nanum 폰트 또는 시스템 한글 폰트
             font_candidates = [
-                'NanumGothic', 'Nanum Gothic', 'NanumBarunGothic',
+                'NanumGothicCoding', 'NanumGothic', 'Nanum Gothic', 'NanumBarunGothic',
                 'Noto Sans CJK KR', 'Noto Sans KR', 'DejaVu Sans',
                 'Liberation Sans', 'Arial Unicode MS'
             ]
