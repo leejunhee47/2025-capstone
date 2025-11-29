@@ -11,6 +11,8 @@ Provides comprehensive visualization of XAI results:
 """
 
 import json
+import os
+import platform
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import seaborn as sns
@@ -81,13 +83,50 @@ class PIAVisualizer:
         }
 
     def _setup_korean_font(self):
-        """Configure matplotlib to use Korean font."""
-        try:
-            plt.rcParams['font.family'] = self.korean_font
-            plt.rcParams['axes.unicode_minus'] = False  # Fix minus sign display
-        except Exception as e:
-            print(f"Warning: Failed to set Korean font '{self.korean_font}': {e}")
-            print("Falling back to default font (Korean text may not display correctly)")
+        """Configure matplotlib to use Korean font with OS-aware fallback."""
+        plt.rcParams['axes.unicode_minus'] = False  # Fix minus sign display
+        
+        # OS별 한글 폰트 우선순위 설정
+        system = platform.system()
+        
+        if system == 'Windows':
+            # Windows: Malgun Gothic (맑은 고딕)
+            font_candidates = ['Malgun Gothic', 'NanumGothic', 'Gulim']
+        elif system == 'Linux':
+            # Linux: Nanum 폰트 또는 시스템 한글 폰트
+            font_candidates = [
+                'NanumGothic', 'Nanum Gothic', 'NanumBarunGothic',
+                'Noto Sans CJK KR', 'Noto Sans KR', 'DejaVu Sans',
+                'Liberation Sans', 'Arial Unicode MS'
+            ]
+        elif system == 'Darwin':  # macOS
+            font_candidates = ['AppleGothic', 'NanumGothic', 'Arial Unicode MS']
+        else:
+            # 기타 OS: 일반 한글 폰트 시도
+            font_candidates = ['NanumGothic', 'DejaVu Sans', 'Arial Unicode MS']
+        
+        # 사용자가 지정한 폰트를 우선 시도
+        if self.korean_font and self.korean_font not in font_candidates:
+            font_candidates.insert(0, self.korean_font)
+        
+        # 폰트 찾기 시도
+        font_found = False
+        for font_name in font_candidates:
+            try:
+                # 폰트가 실제로 존재하는지 확인
+                font_list = [f.name for f in fm.fontManager.ttflist]
+                if font_name in font_list:
+                    plt.rcParams['font.family'] = font_name
+                    font_found = True
+                    break
+            except Exception:
+                continue
+        
+        # 폰트를 찾지 못한 경우 기본 폰트 사용 (경고 억제)
+        if not font_found:
+            # matplotlib가 자동으로 폰트를 찾도록 함 (경고 억제)
+            plt.rcParams['font.family'] = 'sans-serif'
+            # 경고 메시지 출력하지 않음 (로그가 너무 많아지는 것을 방지)
 
     def load_xai_result(self, json_path: str) -> Dict[str, Any]:
         """
@@ -363,11 +402,16 @@ class PIAVisualizer:
             baseline_path = Path(__file__).parent.parent.parent / 'mar_baseline_pia_real_fixed.json'
             phoneme_baseline = {}
             try:
-                with open(baseline_path, 'r', encoding='utf-8') as f:
-                    baseline_data = json.load(f)
-                    phoneme_baseline = baseline_data.get('phoneme_stats', {})
+                if baseline_path.exists():
+                    with open(baseline_path, 'r', encoding='utf-8') as f:
+                        baseline_data = json.load(f)
+                        phoneme_baseline = baseline_data.get('phoneme_stats', {})
+                else:
+                    # 파일이 없으면 경고만 출력하고 계속 진행 (기본값 사용)
+                    pass  # 경고 메시지는 로그가 너무 많아지므로 생략
             except Exception as e:
-                print(f"[WARNING] Failed to load baseline: {e}")
+                # 파일 읽기 실패 시에도 계속 진행
+                pass  # 경고 메시지는 로그가 너무 많아지므로 생략
 
         # 모든 phoneme에 대한 정보 수집 (abnormal + normal)
         # phoneme_vocab에서 모든 phoneme 가져오기
@@ -865,11 +909,16 @@ class PIAVisualizer:
         baseline_path = Path(__file__).parent.parent.parent / 'mar_baseline_pia_real_fixed.json'
         phoneme_baseline = {}
         try:
-            with open(baseline_path, 'r', encoding='utf-8') as f:
-                baseline_data = json.load(f)
-                phoneme_baseline = baseline_data.get('phoneme_stats', {})
+            if baseline_path.exists():
+                with open(baseline_path, 'r', encoding='utf-8') as f:
+                    baseline_data = json.load(f)
+                    phoneme_baseline = baseline_data.get('phoneme_stats', {})
+            else:
+                # 파일이 없으면 경고만 출력하고 계속 진행 (기본값 사용)
+                pass  # 경고 메시지는 로그가 너무 많아지므로 생략
         except Exception as e:
-            print(f"[WARNING] Failed to load baseline: {e}")
+            # 파일 읽기 실패 시에도 계속 진행
+            pass  # 경고 메시지는 로그가 너무 많아지므로 생략
 
         # Calculate per-phoneme MAR statistics
         phoneme_mar_stats = {}
