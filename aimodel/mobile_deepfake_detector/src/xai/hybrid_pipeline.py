@@ -12,7 +12,6 @@ from .stage1_scanner import Stage1Scanner
 from .stage2_analyzer import Stage2Analyzer
 from .result_aggregator import ResultAggregator
 from .hybrid_utils import convert_for_json
-from .thumbnail_generator import generate_detection_card
 from .pia_visualizer import PIAVisualizer
 from ..utils.feature_cache import FeatureCache
 from ..utils.jamo_to_mfa import mfa_to_korean
@@ -317,26 +316,12 @@ class HybridXAIPipeline:
         video_info = self.aggregator.extract_video_info(local_video_path)
         summary = self.aggregator.generate_korean_summary(detection, pia_result, video_info)
         
-        # Thumbnail & Visualizations
-        thumbnail_path = None
+        # Visualizations
         stage1_viz_path = None
         pia_viz_path = None
         interval_viz_paths: List[str] = []
         
         if save_visualizations:
-            # Thumbnail 생성
-            thumbnail_path = str(Path(output_dir) / 'thumbnail.png')
-            try:
-                generate_detection_card(
-                    video_path=local_video_path,
-                    detection=detection,
-                    output_path=thumbnail_path
-                )
-                logger.info(f"Generated detection card: {thumbnail_path}")
-            except Exception as e:
-                logger.warning(f"Thumbnail generation failed: {e}")
-                thumbnail_path = None
-            
             # [NEW] MMMS-BA Timeline 시각화 (모든 의심 구간 표시)
             try:
                 stage1_viz_path = self._visualize_stage1_timeline(
