@@ -422,13 +422,24 @@ def build_korean_summary(
 
         # Reuse phoneme attention analysis from PIAExplainer
         phoneme_analysis = first_xai.get('phoneme_analysis', {})
+        top_phoneme = '알 수 없음'
+        top_attention = 0.0
+
         if phoneme_analysis and 'phoneme_scores' in phoneme_analysis:
-            top_phoneme_data = phoneme_analysis['phoneme_scores'][0]
-            top_phoneme = top_phoneme_data.get('phoneme_korean', '알 수 없음')
-            top_attention = top_phoneme_data.get('attention_weight', 0.0)
+            # Filter out <pad> tokens from phoneme scores
+            valid_scores = [
+                ps for ps in phoneme_analysis['phoneme_scores']
+                if ps.get('phoneme_korean') and ps.get('phoneme_korean') != '<pad>'
+            ]
+            if valid_scores:
+                top_phoneme_data = valid_scores[0]
+                top_phoneme = top_phoneme_data.get('phoneme_korean', '알 수 없음')
+                top_attention = top_phoneme_data.get('attention_weight', 0.0)
         else:
             # Fallback for older format
-            top_phoneme = first_xai.get('top_phoneme', '알 수 없음')
+            fallback_phoneme = first_xai.get('top_phoneme', '알 수 없음')
+            if fallback_phoneme and fallback_phoneme != '<pad>':
+                top_phoneme = fallback_phoneme
             top_attention = first_xai.get('top_attention', 0.0)
 
         primary_reason = (
@@ -444,7 +455,8 @@ def build_korean_summary(
         phoneme_analysis = xai.get('phoneme_analysis', {})
         for phoneme_data in phoneme_analysis.get('phoneme_scores', []):
             phoneme = phoneme_data.get('phoneme_korean')
-            if phoneme:
+            # Filter out <pad> tokens
+            if phoneme and phoneme != '<pad>':
                 phoneme_counts[phoneme] = phoneme_counts.get(phoneme, 0) + 1
 
     top_phonemes = sorted(phoneme_counts.keys(), key=lambda p: phoneme_counts[p], reverse=True)[:3]
@@ -493,7 +505,8 @@ def aggregate_interval_insights(interval_xai_results: List[Dict]) -> Dict:
             phoneme = phoneme_data.get('phoneme_korean')
             attention = phoneme_data.get('attention_weight', 0.0)
 
-            if phoneme:
+            # Filter out <pad> tokens
+            if phoneme and phoneme != '<pad>':
                 if phoneme not in phoneme_attentions:
                     phoneme_attentions[phoneme] = []
                     phoneme_intervals[phoneme] = []
