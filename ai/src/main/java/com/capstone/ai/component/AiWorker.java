@@ -123,6 +123,8 @@ public class AiWorker {
             return false;
         }
     }
+
+
     private boolean runImageScript(DetectionRequest request) {
         try {
             log.info("이미지 생성 스크립트 실행: ID={}", request.getRequestId());
@@ -154,6 +156,8 @@ public class AiWorker {
             return false;
         }
     }
+
+
 
     private void sendResultToBackend(String requestId, String jsonResult, File img1, File img2) {
         try {

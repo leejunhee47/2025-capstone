@@ -1,0 +1,88 @@
+{
+  "total_videos": 5,
+  "successful": 5,
+  "with_audio": 5,
+  "with_frames": 5,
+  "videos": [
+    {
+      "video_path": "dataset_sample\\원천데이터\\train_변조\\106792\\106792_40068_2_1070.mp4",
+      "video_id": "106792_40068_2_1070",
+      "success": true,
+      "audio_file": "audio/106792_40068_2_1070.npy",
+      "audio_shape": [
+        320250
+      ],
+      "frames_file": "frames/106792_40068_2_1070.npy",
+      "frames_shape": [
+        30,
+        224,
+        224,
+        3
+      ]
+    },
+    {
+      "video_path": "dataset_sample\\원천데이터\\train_변조\\106792\\106792_40068_2_1080.mp4",
+      "video_id": "106792_40068_2_1080",
+      "success": true,
+      "audio_file": "audio/106792_40068_2_1080.npy",
+      "audio_shape": [
+        320250
+      ],
+      "frames_file": "frames/106792_40068_2_1080.npy",
+      "frames_shape": [
+        30,
+        224,
+        224,
+        3
+      ]
+    },
+    {
+      "video_path": "dataset_sample\\원천데이터\\train_변조\\106792\\106792_40068_2_1090.mp4",
+      "video_id": "106792_40068_2_1090",
+      "success": true,
+      "audio_file": "audio/106792_40068_2_1090.npy",
+      "audio_shape": [
+        320250
+      ],
+      "frames_file": "frames/106792_40068_2_1090.npy",
+      "frames_shape": [
+        30,
+        224,
+        224,
+        3
+      ]
+    },
+    {
+      "video_path": "dataset_sample\\원천데이터\\train_변조\\106792\\106792_40068_2_1100.mp4",
+      "video_id": "106792_40068_2_1100",
+      "success": true,
+      "audio_file": "audio/106792_40068_2_1100.npy",
+      "audio_shape": [
+        320250
+      ],
+      "frames_file": "frames/106792_40068_2_1100.npy",
+      "frames_shape": [
+        30,
+        224,
+        224,
+        3
+      ]
+    },
+    {
+      "video_path": "dataset_sample\\원천데이터\\train_변조\\106792\\106792_40068_2_1110.mp4",
+      "video_id": "106792_40068_2_1110",
+      "success": true,
+      "audio_file": "audio/106792_40068_2_1110.npy",
+      "audio_shape": [
+        320250
+      ],
+      "frames_file": "frames/106792_40068_2_1110.npy",
+      "frames_shape": [
+        30,
+        224,
+        224,
+        3
+      ]
+    }
+  ]
+}

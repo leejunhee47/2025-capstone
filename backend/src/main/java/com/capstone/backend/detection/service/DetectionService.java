@@ -52,6 +52,9 @@ public class DetectionService {
     private String aiUrl;
 
 
+    @Value("${thumbnail.stabilization.time}")
+    private int stabilizationTime;
+
     @Autowired
     public DetectionService(DetectionRequestRepository detectionRequestRepository ,
                             DetectionResultRepository detectionResultRepository ,
@@ -131,8 +134,6 @@ public class DetectionService {
     }
 
 
-
-    // todo : 비동기 일때 , DB 상태 안바뀌는 이유 탐색
     @Async
     @Transactional
     public void startUrlDetection(DetectionRequest request ,  String url) {
@@ -182,18 +183,7 @@ public class DetectionService {
                 throw new RuntimeException("yt-dlp process failed with exit code: " + exitCode);
             }
 
-            // DB 갱신
-            managedRequest.setVideoPath(outputFilePath);
-
-            // 썸네일 따놓기
-            String thumbnailPath = extractThumbnail(outputFilePath, managedRequest.getRequestId());
-            managedRequest.setThumbnailPath(thumbnailPath);
-
-
-            managedRequest.setStatus(DetectionStatus.PROCESSING);
-            detectionRequestRepository.save(managedRequest);
-
-
+            Thread.sleep(stabilizationTime);
 
             //  AI 서버에 분석 요청
             log.info("AI 서버 분석 요청 시작. Request ID: {}", managedRequest.getRequestId());
@@ -222,6 +212,76 @@ public class DetectionService {
             throw new RuntimeException("Error processing URL for RequestId: " + managedRequest.getRequestId(), e);
         }
     }
+
+    @Transactional
+    public void subUrlDetection(DetectionRequest request ,  String url) {
+
+        log.info("sub is called");
+
+        DetectionRequest managedRequest = detectionRequestRepository.findById(request.getRequestId())
+                .orElse(null);
+
+        if (managedRequest == null) {
+            throw new IllegalArgumentException("DetectionRequest not found with ID: " + request.getRequestId());
+        }
+
+        if (url == null || url.trim().isEmpty()) {
+            managedRequest.setStatus(DetectionStatus.FAILED);
+            detectionRequestRepository.save(managedRequest);
+            throw new IllegalArgumentException("URL must not be null or empty for RequestId: " + request.getRequestId());
+        }
+
+
+            String outputFilePath = uploadDir + File.separator + managedRequest.getRequestId() + ".mp4";
+            // DB 갱신
+            managedRequest.setVideoPath(outputFilePath);
+
+        try {
+            File videoFile = new File(outputFilePath);
+
+            // --- [추가된 로직] 파일이 생성될 때까지 대기 (최대 60초) ---
+            long timeoutMillis = 60000; // 60초 타임아웃
+            long startTime = System.currentTimeMillis();
+
+            // 파일이 없거나(exists false) 크기가 0이면 계속 대기
+            while (!videoFile.exists() || videoFile.length() == 0) {
+
+                // 타임아웃 체크
+                if (System.currentTimeMillis() - startTime > timeoutMillis) {
+                    log.error("Timeout waiting for file: {}", outputFilePath);
+                    throw new IllegalArgumentException("Video file was not created within timeout.");
+                }
+
+                try {
+                    Thread.sleep(1000); // 1초 간격으로 확인
+                    log.info("Waiting for video file... RequestId: {}", managedRequest.getRequestId());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Interrupted while waiting for file", e);
+                }
+            }
+            // -------------------------------------------------------
+
+            log.info("File detected. Waiting few seconds for stabilization... RequestId: {}", managedRequest.getRequestId());
+            Thread.sleep(stabilizationTime);
+
+            // 썸네일 따놓기 (파일이 존재함을 확인했으므로 진행)
+            String thumbnailPath = extractThumbnail(outputFilePath, managedRequest.getRequestId());
+            managedRequest.setThumbnailPath(thumbnailPath);
+
+        } catch (Exception e) {
+            // 에러 발생 시 상태 업데이트 (선택 사항)
+            managedRequest.setStatus(DetectionStatus.FAILED);
+            detectionRequestRepository.save(managedRequest);
+            throw new IllegalArgumentException("Thumbnail extraction failed for RequestId: " + managedRequest.getRequestId(), e);
+        }
+
+            managedRequest.setStatus(DetectionStatus.PROCESSING);
+            detectionRequestRepository.save(managedRequest);
+    }
+
+
+
 
     private String extractThumbnail(String videoPath, Long requestId) throws IOException, InterruptedException {
         // 썸네일 저장 디렉토리 생성

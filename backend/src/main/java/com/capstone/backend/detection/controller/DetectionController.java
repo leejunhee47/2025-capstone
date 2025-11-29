@@ -145,6 +145,7 @@ public class DetectionController {
         try {
             newRequest = detectionService.saveNewDetectionRequest(loginMember, callbackUrl);
             detectionService.startUrlDetection(newRequest , videoUrl);
+            detectionService.subUrlDetection(newRequest, videoUrl);
         } catch (Exception e) {
             ErrorResponse errorResponse = new ErrorResponse(
                     "SERVER_ERROR",
@@ -162,6 +163,8 @@ public class DetectionController {
         DetectionCheckResponse response = new DetectionCheckResponse(newRequest.getRequestId());
         return ResponseEntity.accepted().body(response);
     }
+
+
     // AI 서버 -> 백엔드 서버 (결과: JSON + Images)
     @PostMapping(value = "detection/result", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<?> getDetectionResult(
@@ -222,6 +225,9 @@ public class DetectionController {
 
         return ResponseEntity.ok().build();
     }
+
+
+
 
     // 백엔드 서버 -> 클라이언트 (간단 결과)
     @PostMapping("detection/result/polling")
