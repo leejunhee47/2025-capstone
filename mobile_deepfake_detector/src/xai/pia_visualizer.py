@@ -861,6 +861,16 @@ class PIAVisualizer:
         phoneme_vocab = get_phoneme_vocab()
         skip_tokens = {'<pad>', '<PAD>', '<unk>', '<UNK>', '', 'sil', 'sp', 'spn'}
 
+        # [FIX] Load phoneme-specific baseline (instead of in-video baseline)
+        baseline_path = Path(__file__).parent.parent.parent / 'mar_baseline_pia_real_fixed.json'
+        phoneme_baseline = {}
+        try:
+            with open(baseline_path, 'r', encoding='utf-8') as f:
+                baseline_data = json.load(f)
+                phoneme_baseline = baseline_data.get('phoneme_stats', {})
+        except Exception as e:
+            print(f"[WARNING] Failed to load baseline: {e}")
+
         # Calculate per-phoneme MAR statistics
         phoneme_mar_stats = {}
         for phoneme in phoneme_vocab:
@@ -875,27 +885,31 @@ class PIAVisualizer:
                     'max': float(np.max(mar_values))
                 }
 
-        # Calculate in-video baseline
-        valid_mar = mar_interval[~np.isin(phoneme_interval, list(skip_tokens))]
-        if len(valid_mar) > 0:
-            video_mean = float(np.mean(valid_mar))
-            video_std = float(np.std(valid_mar)) if len(valid_mar) > 1 else 0.1
-        else:
-            video_mean = 0.5
-            video_std = 0.1
-
         # Prepare visualization data
         phoneme_names = []
         measured_mar = []
         mar_stds = []
         frame_counts = []
         colors = []
-
-        effective_std = max(video_std, 0.05)  # Minimum threshold for stability
+        expected_means = []
+        expected_p10s = []
+        expected_p90s = []
+        z_scores_list = []
 
         for phoneme in phoneme_vocab:
             phoneme_kr = phoneme_to_korean(phoneme)
             phoneme_names.append(phoneme_kr)
+
+            # Get phoneme-specific baseline
+            baseline_stats = phoneme_baseline.get(phoneme, {})
+            baseline_mean = baseline_stats.get('mean', 0.3)
+            baseline_std = baseline_stats.get('std', 0.09)
+            baseline_p10 = baseline_stats.get('p10', baseline_mean - baseline_std)
+            baseline_p90 = baseline_stats.get('p90', baseline_mean + baseline_std)
+
+            expected_means.append(baseline_mean)
+            expected_p10s.append(baseline_p10)
+            expected_p90s.append(baseline_p90)
 
             if phoneme in phoneme_mar_stats:
                 stats = phoneme_mar_stats[phoneme]
@@ -903,8 +917,10 @@ class PIAVisualizer:
                 mar_stds.append(stats['std'])
                 frame_counts.append(stats['count'])
 
-                # Calculate z-score for abnormality coloring
-                z_score = abs(stats['mean'] - video_mean) / effective_std
+                # [FIX] Calculate z-score using phoneme-specific baseline
+                effective_std = max(baseline_std, 0.05)  # Minimum threshold for stability
+                z_score = abs(stats['mean'] - baseline_mean) / effective_std
+                z_scores_list.append(z_score)
 
                 if z_score > 3:
                     colors.append('#d32f2f')  # Critical - dark red
@@ -919,35 +935,38 @@ class PIAVisualizer:
                 measured_mar.append(0)
                 mar_stds.append(0)
                 frame_counts.append(0)
+                z_scores_list.append(0)
                 colors.append('#9e9e9e')  # Gray for missing
 
         # Create bar chart
         x_pos = np.arange(len(phoneme_names))
         width = 0.6
 
-        # Draw bars with error bars
+        # [FIX] First draw P10-P90 expected range background for each phoneme
+        for i, (p10, p90, exp_mean) in enumerate(zip(expected_p10s, expected_p90s, expected_means)):
+            # P10-P90 range (gray area)
+            ax.bar(i, p90 - p10, width, bottom=p10,
+                   color='lightgray', alpha=0.3, edgecolor='gray', linewidth=0.5, zorder=1)
+            # Expected mean (blue dashed line)
+            ax.plot([i - width/2, i + width/2], [exp_mean, exp_mean],
+                   color='blue', linestyle='--', linewidth=1.5, alpha=0.6, zorder=2)
+
+        # Draw measured MAR bars
         bars = ax.bar(x_pos, measured_mar, width, color=colors, alpha=0.7,
-                     edgecolor='black', linewidth=1)
+                     edgecolor='black', linewidth=1, zorder=3)
 
         # Add error bars for std
         ax.errorbar(x_pos, measured_mar, yerr=mar_stds, fmt='none',
-                   ecolor='black', capsize=3, capthick=1, alpha=0.6)
+                   ecolor='black', capsize=3, capthick=1, alpha=0.6, zorder=4)
 
-        # Add baseline mean line
-        ax.axhline(y=video_mean, color='blue', linestyle='--', linewidth=2,
-                  label=f'영상 평균 (mean={video_mean:.3f})')
-
-        # Add ±2 std range
-        ax.axhline(y=video_mean + 2*effective_std, color='red', linestyle=':',
-                  linewidth=1.5, alpha=0.7, label=f'+2σ ({video_mean + 2*effective_std:.3f})')
-        ax.axhline(y=video_mean - 2*effective_std, color='red', linestyle=':',
-                  linewidth=1.5, alpha=0.7, label=f'-2σ ({max(0, video_mean - 2*effective_std):.3f})')
-
-        # Add frame count annotations
-        for i, (bar, count) in enumerate(zip(bars, frame_counts)):
+        # Add frame count and z-score annotations
+        for i, (bar, count, z_score) in enumerate(zip(bars, frame_counts, z_scores_list)):
             if count > 0:
+                label_text = f'n={count}'
+                if z_score >= 1.5:
+                    label_text += f'\nz={z_score:.1f}'
                 ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
-                       f'n={count}', ha='center', va='bottom', fontsize=8, alpha=0.7)
+                       label_text, ha='center', va='bottom', fontsize=7, alpha=0.8)
 
         # Formatting
         ax.set_xlabel('음소 (Phoneme)', fontsize=12, fontweight='bold')
@@ -955,18 +974,24 @@ class PIAVisualizer:
         ax.set_xticks(x_pos)
         ax.set_xticklabels(phoneme_names, rotation=0, ha='center', fontsize=10)
         ax.grid(True, alpha=0.3, axis='y')
-        ax.set_ylim(0, max(measured_mar) * 1.2 + 0.1 if measured_mar else 1.0)
+
+        # Set y-axis limit considering expected ranges
+        max_val = max(max(measured_mar) if measured_mar else 0, max(expected_p90s) if expected_p90s else 0)
+        ax.set_ylim(0, max_val * 1.2 + 0.1 if max_val > 0 else 1.0)
 
         # Legend
         from matplotlib.patches import Patch
+        from matplotlib.lines import Line2D
         legend_elements = [
+            Patch(facecolor='lightgray', alpha=0.3, edgecolor='gray', label='기대 범위 (P10-P90)'),
+            Line2D([0], [0], color='blue', linestyle='--', linewidth=1.5, label='기대 평균'),
             Patch(facecolor='#4caf50', alpha=0.7, label='정상 (|z|<1.5)'),
             Patch(facecolor='#fbc02d', alpha=0.7, label='경미 (1.5≤|z|<2)'),
             Patch(facecolor='#ff6f00', alpha=0.7, label='높음 (2≤|z|<3)'),
             Patch(facecolor='#d32f2f', alpha=0.7, label='심각 (|z|≥3)'),
-            Patch(facecolor='#9e9e9e', alpha=0.7, label='없음'),
+            Patch(facecolor='#9e9e9e', alpha=0.7, label='데이터 없음'),
         ]
-        ax.legend(handles=legend_elements, loc='upper right', fontsize=8)
+        ax.legend(handles=legend_elements, loc='upper right', fontsize=7)
 
         # Title with interval info
         if suspicious_intervals and len(suspicious_intervals) > 0:
@@ -980,9 +1005,10 @@ class PIAVisualizer:
 
         ax.set_title(title, fontsize=14, weight='bold', pad=15)
 
-        # Stats text box
+        # Stats text box - count abnormal phonemes
         total_frames = sum(frame_counts)
-        stats_text = f"분석 프레임: {total_frames}\n영상 평균: {video_mean:.3f}\n표준편차: {video_std:.3f}"
+        abnormal_count = sum(1 for z in z_scores_list if z >= 1.5)
+        stats_text = f"분석 프레임: {total_frames}\n이상 음소: {abnormal_count}/14\n(음소별 baseline 비교)"
         ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
                fontsize=9, verticalalignment='top',
                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
