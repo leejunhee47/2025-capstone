@@ -213,6 +213,12 @@ public class DetectionService {
         }
     }
 
+
+
+
+
+
+
     @Transactional
     public void subUrlDetection(DetectionRequest request ,  String url) {
 
