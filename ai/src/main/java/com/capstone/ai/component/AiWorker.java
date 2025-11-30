@@ -11,9 +11,14 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate; // RestTemplate 임포트
+
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files; // Files 임포트
+import java.util.ArrayList;
+import java.util.List;
 
 @Slf4j
 @Component
@@ -43,6 +48,9 @@ public class AiWorker {
     @Value("${ai.result.example2}")
     private String resultImgResult2;
 
+    @Value("${ai.model.execute.path}")
+    private String modelExecutePath;
+
 
     @Autowired
     AiWorker(AiJobQueue aiJobQueue, RestTemplate restTemplate) { // (수정) RestTemplate 주입
@@ -69,94 +77,73 @@ public class AiWorker {
     }
 
     private void processRequest(DetectionRequest request) {
-        // 1. 기존 분석 스크립트 (JSON 생성)
-        boolean jsonSuccess = runDetectionScript(request);
-        if (!jsonSuccess) return;
-
-        // 2. (추가) 이미지 생성/저장 스크립트 실행
-        boolean imgSuccess = runImageScript(request);
-        if (!imgSuccess) return;
-
-        // 3. 결과 파일들 읽기 및 전송 준비
-        String outputJsonPath = resultPath + File.separator + request.getRequestId() + ".json";
-        String outputImgPath1 = resultImgPath + File.separator + request.getRequestId() + "_1.jpg";
-        String outputImgPath2 = resultImgPath + File.separator + request.getRequestId() + "_2.jpg";
+        log.info("AI 모델 프로세스 실행 시작: RequestID={}, Video={}", request.getRequestId(), request.getVideoPath());
 
         try {
-            File jsonFile = new File(outputJsonPath);
-            File imgFile1 = new File(outputImgPath1);
-            File imgFile2 = new File(outputImgPath2);
+            // 1. 명령어 및 인자 구성 (상대 경로 사용)
+            List<String> command = new ArrayList<>();
+            command.add("python");
+            command.add("-m");
+            command.add("src.xai.hybrid_pipeline"); // 모듈 실행 방식
 
-            if (jsonFile.exists() && imgFile1.exists() && imgFile2.exists()) {
-                String jsonResult = Files.readString(jsonFile.toPath(), StandardCharsets.UTF_8);
+            command.add("--video");
+            command.add(request.getVideoPath()); // 요청받은 비디오 경로
 
-                // 4. 백엔드로 JSON + 이미지 전송
-                sendResultToBackend(request.getRequestId(), jsonResult, imgFile1, imgFile2);
+            command.add("--mmms-model");
+            command.add("models/checkpoints/mmms-ba_fulldata_best.pth"); // 루트 기준 상대경로
 
-                // 5. 임시 파일 삭제 (청소)
-                jsonFile.delete();
-                imgFile1.delete();
-                imgFile2.delete();
-                log.info("임시 결과 파일(JSON/Images) 삭제 완료: ID={}", request.getRequestId());
-            } else {
-                log.error("결과 파일 중 일부가 누락되었습니다. ID={}", request.getRequestId());
+            command.add("--pia-model");
+            command.add("models/checkpoints/pia-best.pth"); // 루트 기준 상대경로
+
+            command.add("--output-dir");
+            // 결과가 저장될 폴더 (고정 경로 사용 시 주의: 동시 요청 시 덮어쓰기 될 수 있음)
+            command.add("outputs/xai/hybrid/demo_run");
+
+            command.add("--device");
+            command.add("cuda");
+
+            // 2. ProcessBuilder 설정
+            ProcessBuilder pb = new ProcessBuilder(command);
+
+            // ★ 핵심 1: 작업 디렉토리를 프로젝트 루트로 고정
+            // application.properties의 ai.model.execute.path 값이 정확해야 합니다.
+            pb.directory(new File(modelExecutePath));
+
+            // ★ 핵심 2: PYTHONPATH를 현재 위치(.)로 설정하여 모듈 Import 에러 방지
+            pb.environment().put("PYTHONPATH", ".");
+
+            // 표준 에러(stderr)를 표준 출력(stdout)으로 리다이렉트 (로그 보기 편함)
+            pb.redirectErrorStream(true);
+
+            // 3. 프로세스 시작
+            Process process = pb.start();
+
+            // 4. 프로세스 로그 실시간 출력 (버퍼링 방지용)
+            // 이걸 안 해주면 버퍼가 꽉 차서 프로세스가 멈출(Hang) 수 있습니다.
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    log.info("[Python AI] " + line);
+                }
             }
 
-        } catch (Exception e) {
-            log.error("결과 처리 중 오류 발생", e);
-        }
-    }
-
-    private boolean runDetectionScript(DetectionRequest request) {
-        String outputJsonPath = resultPath + File.separator + request.getRequestId() + ".json";
-        try {
-            ProcessBuilder processBuilder = new ProcessBuilder(
-                    "python", scriptPath, outputJsonPath, request.getVideoPath(), request.getRequestId()
-            );
-            processBuilder.redirectOutput(ProcessBuilder.Redirect.INHERIT);
-            processBuilder.redirectError(ProcessBuilder.Redirect.INHERIT);
-            Process process = processBuilder.start();
+            // 5. 종료 대기
             int exitCode = process.waitFor();
-            return exitCode == 0;
-        } catch (Exception e) {
-            log.error("AI 분석 스크립트 실행 오류", e);
-            return false;
-        }
-    }
-
-
-    private boolean runImageScript(DetectionRequest request) {
-        try {
-            log.info("이미지 생성 스크립트 실행: ID={}", request.getRequestId());
-
-            ProcessBuilder processBuilder = new ProcessBuilder(
-                    "python",
-                    imageScriptPath,        // 새로 만든 파이썬 스크립트 경로
-                    request.getRequestId(), // 인자 1
-                    resultImgResult1,       // 인자 2 (예제 이미지1)
-                    resultImgResult2,       // 인자 3 (예제 이미지2)
-                    resultImgPath           // 인자 4 (저장 폴더)
-            );
-
-            processBuilder.redirectOutput(ProcessBuilder.Redirect.INHERIT);
-            processBuilder.redirectError(ProcessBuilder.Redirect.INHERIT);
-
-            Process process = processBuilder.start();
-            int exitCode = process.waitFor();
+            log.info("AI 프로세스 종료 코드: {}", exitCode);
 
             if (exitCode == 0) {
-                log.info("이미지 생성 완료: ID={}", request.getRequestId());
-                return true;
+                // 성공 시 결과 파일 읽어서 백엔드로 전송
+//                handleAiSuccess(request.getRequestId());
             } else {
-                log.error("이미지 스크립트 실패 (Exit Code: {})", exitCode);
-                return false;
+                log.error("AI 프로세스가 비정상 종료되었습니다 (Exit Code: {}).", exitCode);
+                // 필요 시 실패 처리 로직 추가
             }
+
         } catch (Exception e) {
-            log.error("이미지 스크립트 실행 중 예외 발생", e);
-            return false;
+            log.error("AI 프로세스 실행 중 예외 발생", e);
+            Thread.currentThread().interrupt();
         }
     }
-
 
 
     private void sendResultToBackend(String requestId, String jsonResult, File img1, File img2) {
