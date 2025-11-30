@@ -14,6 +14,7 @@ import org.springframework.web.client.RestTemplate; // RestTemplate 임포트
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files; // Files 임포트
@@ -132,8 +133,8 @@ public class AiWorker {
             log.info("AI 프로세스 종료 코드: {}", exitCode);
 
             if (exitCode == 0) {
-                // 성공 시 결과 파일 읽어서 백엔드로 전송
-//                handleAiSuccess(request.getRequestId());
+                // 성공 시 결과 파일 처리 로직 호출
+                handleAiSuccess(request);
             } else {
                 log.error("AI 프로세스가 비정상 종료되었습니다 (Exit Code: {}).", exitCode);
                 // 필요 시 실패 처리 로직 추가
@@ -145,36 +146,71 @@ public class AiWorker {
         }
     }
 
+// ================= [새로 추가된 메서드] =================
+    /**
+     * AI 분석 완료 후 결과 파일(JSON, 이미지)을 찾아 백엔드로 전송
+     */
+    private void handleAiSuccess(DetectionRequest request) {
+        try {
+            // 1. 영상 파일명 추출 (확장자 제거)
+            // 예: /path/to/video_123.mp4 -> video_123
+            File videoFile = new File(request.getVideoPath());
+            String fileName = videoFile.getName();
+            int dotIndex = fileName.lastIndexOf('.');
+            String baseName = (dotIndex == -1) ? fileName : fileName.substring(0, dotIndex);
+
+            // 2. 결과 파일 경로 구성
+            // modelExecutePath + outputs/xai/hybrid/demo_run
+            File outputDir = new File(modelExecutePath, "outputs/xai/hybrid/demo_run");
+
+            // 파일 1: JSON 결과
+            File resultJsonFile = new File(outputDir, "result.json");
+
+            // 파일 2: 이미지 결과 (파일명 규칙 적용)
+            // 규칙 1: [영상 이름]_pia_xai.png
+            File img1 = new File(outputDir, baseName + "_pia_xai.png");
+            // 규칙 2: [영상 이름]_stage1_timeline.png
+            File img2 = new File(outputDir, baseName + "_stage1_timeline.png");
+
+            // 3. 파일 존재 여부 확인 및 전송
+            if (resultJsonFile.exists() && img1.exists() && img2.exists()) {
+                // JSON 파일 내용 읽기
+                String jsonContent = Files.readString(resultJsonFile.toPath(), StandardCharsets.UTF_8);
+
+                log.info("결과 파일 로드 성공. 백엔드 전송 시작. RequestId={}", request.getRequestId());
+
+                // 백엔드 전송 메서드 호출
+                sendResultToBackend(request.getRequestId(), jsonContent, img1, img2);
+            } else {
+                log.error("결과 파일 중 일부가 존재하지 않습니다. 경로를 확인하세요.");
+                log.error("JSON: {}, Exists: {}", resultJsonFile.getPath(), resultJsonFile.exists());
+                log.error("Img1: {}, Exists: {}", img1.getPath(), img1.exists());
+                log.error("Img2: {}, Exists: {}", img2.getPath(), img2.exists());
+            }
+
+        } catch (IOException e) {
+            log.error("결과 파일 읽기 실패: {}", e.getMessage());
+        }
+    }
 
     private void sendResultToBackend(String requestId, String jsonResult, File img1, File img2) {
         try {
-            // 1. 전체 요청의 헤더 (Multipart Form Data)
             HttpHeaders mainHeaders = new HttpHeaders();
             mainHeaders.setContentType(MediaType.MULTIPART_FORM_DATA);
 
-            // Body 설정
             MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
 
-            // ================= [수정된 부분 시작] =================
-            // 2. JSON 데이터 추가 시 헤더(application/json)를 명시해야 함
             HttpHeaders jsonHeaders = new HttpHeaders();
             jsonHeaders.setContentType(MediaType.APPLICATION_JSON);
-
-            // 내용물(jsonResult)과 헤더(jsonHeaders)를 묶어서 HttpEntity로 만듦
             HttpEntity<String> jsonEntity = new HttpEntity<>(jsonResult, jsonHeaders);
 
             body.add("result", jsonEntity);
-            // ================= [수정된 부분 끝] ===================
-
-            // 3. 이미지 파일 추가 (FileSystemResource 사용)
             body.add("images", new FileSystemResource(img1));
             body.add("images", new FileSystemResource(img2));
 
-            // 전체 요청 엔티티 생성
             HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, mainHeaders);
 
             String targetUrl = backendUrl.endsWith("/") ? backendUrl + "result" : backendUrl + "/result";
-            log.info("백엔드 결과 전송 시도 [RequestId: {}] -> {}", requestId, targetUrl);
 
             ResponseEntity<String> response = restTemplate.postForEntity(
                     targetUrl,

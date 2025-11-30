@@ -76,60 +76,50 @@ public class DetectionResult {
     private LocalDateTime createdAt;
 
     /**
-     * DTO -> Entity 변환 메서드 (모든 필드 매핑)
+     * DTO -> Entity 변환 메서드 (수정됨)
      */
     public static DetectionResult createFrom(DetectionRequest request, AiResultResponse dto) {
 
-        // 1. List -> String 변환
-        String phonemesString = "";
-        if (dto.getSummary().getTopSuspiciousPhonemes() != null) {
-            phonemesString = String.join(",", dto.getSummary().getTopSuspiciousPhonemes());
-        }
-//
-//        // 2. String(ISO Date) -> LocalDateTime 변환
-//        // 예: "2025-11-18T07:38:46.802351Z" 파싱
-//        LocalDateTime parsedTime = null;
-//        if (dto.getMetadata().getProcessedAt() != null) {
-//            try {
-//                parsedTime = LocalDateTime.parse(dto.getMetadata().getProcessedAt(), DateTimeFormatter.ISO_DATE_TIME);
-//            } catch (Exception e) {
-//                // 파싱 실패 시 null 처리하거나 로그 남김
-//                parsedTime = LocalDateTime.now();
-//            }
-//        }
 
+        // todo : null , 0 넣은 부분들 팀원들에게 알림
+        // 1. 사라진 필드들에 대한 기본값 처리
+        // Phonemes가 JSON에 없으므로 빈 문자열 또는 null 처리
+        String phonemesString = "";
+        // (만약 나중에 JSON에 다시 생긴다면 dto.getSummary()... 로 복구)
 
         return DetectionResult.builder()
                 .detectionRequest(request)
 
-                // Metadata
-//                .aiVideoId(dto.getMetadata().getVideoId())
-//                .aiRequestId(dto.getMetadata().getRequestId())
-//                .processedAt(parsedTime)
-//                .processingTimeMs(dto.getMetadata().getProcessingTimeMs())
-//                .pipelineVersion(dto.getMetadata().getPipelineVersion())
+                // Metadata (주석 처리된 부분은 필요 시 해제)
+                // .aiVideoId(dto.getMetadata().getVideoId()) ...
 
                 // Video Info
                 .durationSec(dto.getVideoInfo().getDurationSec())
                 .totalFrames(dto.getVideoInfo().getTotalFrames())
                 .fps(dto.getVideoInfo().getFps())
                 .resolution(dto.getVideoInfo().getResolution())
-//                .originalPath(dto.getVideoInfo().getOriginalPath())
 
                 // Detection
                 .verdict(dto.getDetection().getVerdict())
                 .confidence(dto.getDetection().getConfidence())
                 .probabilityReal(dto.getDetection().getProbabilities().getReal())
                 .probabilityFake(dto.getDetection().getProbabilities().getFake())
-                .suspiciousFrameCount(dto.getDetection().getSuspiciousFrameCount())
-                .suspiciousFrameRatio(dto.getDetection().getSuspiciousFrameRatio())
+
+                // [변경] JSON에 값이 없으므로 0 또는 0.0으로 설정
+                .suspiciousFrameCount(0)
+                .suspiciousFrameRatio(0.0)
 
                 // Summary
                 .summaryTitle(dto.getSummary().getTitle())
                 .summaryRiskLevel(dto.getSummary().getRiskLevel())
                 .summaryPrimaryReason(dto.getSummary().getPrimaryReason())
-                .summarySuspiciousIntervalCount(dto.getSummary().getSuspiciousIntervalCount())
+
+                // [변경] JSON에 값이 없으므로 0으로 설정
+                .summarySuspiciousIntervalCount(0)
+
+                // [변경] JSON에 값이 없으므로 빈 문자열 설정
                 .summaryTopSuspiciousPhonemes(phonemesString)
+
                 .summaryDetailedExplanation(dto.getSummary().getDetailedExplanation())
                 .build();
     }
