@@ -1,5 +1,6 @@
 package com.capstone.backend.detection.response;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties; // 추가
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -12,6 +13,7 @@ import java.util.List;
 @Setter
 @ToString
 @NoArgsConstructor
+@JsonIgnoreProperties(ignoreUnknown = true) // 중요: 정의되지 않은 필드(detail_view 등)는 무시
 public class AiResultResponse {
 
     private Metadata metadata;
@@ -23,28 +25,29 @@ public class AiResultResponse {
 
     private Summary summary;
 
-
     // --- 1. Metadata DTO ---
     @Getter @Setter @NoArgsConstructor
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Metadata {
         @JsonProperty("video_id")
-        private String videoId;        // AI 서버 내부 관리 ID
+        private String videoId;
 
         @JsonProperty("request_id")
-        private String requestId;      // 요청 ID
+        private String requestId;
 
         @JsonProperty("processed_at")
-        private String processedAt;    // 처리 시각 (ISO 8601 String)
+        private String processedAt;
 
         @JsonProperty("processing_time_ms")
-        private Double processingTimeMs; // 처리 소요 시간
+        private Double processingTimeMs;
 
         @JsonProperty("pipeline_version")
-        private String pipelineVersion;  // 모델 버전
+        private String pipelineVersion;
     }
 
     // --- 2. VideoInfo DTO ---
     @Getter @Setter @NoArgsConstructor
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class VideoInfo {
         @JsonProperty("duration_sec")
         private Double durationSec;
@@ -56,33 +59,32 @@ public class AiResultResponse {
         private String resolution;
 
         @JsonProperty("original_path")
-        private String originalPath;   // AI 서버 내의 파일 경로
+        private String originalPath;
     }
 
-    // --- 3. Detection DTO ---
+    // --- 3. Detection DTO (수정됨) ---
     @Getter @Setter @NoArgsConstructor
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Detection {
-        private String verdict;        // real / fake
-        private Double confidence;     // 종합 신뢰도
-
+        private String verdict;
+        private Double confidence;
         private Probabilities probabilities;
 
-        @JsonProperty("suspicious_frame_count")
-        private Integer suspiciousFrameCount;
-
-        @JsonProperty("suspicious_frame_ratio")
-        private Double suspiciousFrameRatio;
+        // JSON에서 사라진 필드들은 DTO에서도 제거하거나 @JsonIgnore 처리해야 깔끔합니다.
+        // 기존 코드 호환성을 위해 남겨둔다면 null로 들어옵니다.
+        // 여기서는 JSON에 없는 필드는 제거했습니다.
     }
 
     @Getter @Setter @NoArgsConstructor
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Probabilities {
         private Double real;
         private Double fake;
     }
 
-
-    // --- 4. Summary DTO ---
+    // --- 4. Summary DTO (수정됨) ---
     @Getter @Setter @NoArgsConstructor
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Summary {
         private String title;
 
@@ -92,15 +94,9 @@ public class AiResultResponse {
         @JsonProperty("primary_reason")
         private String primaryReason;
 
-        @JsonProperty("suspicious_interval_count")
-        private Integer suspiciousIntervalCount;
-
-        @JsonProperty("top_suspicious_phonemes")
-        private List<String> topSuspiciousPhonemes; // ["ㄱ", "ㄴ"]
-
         @JsonProperty("detailed_explanation")
         private String detailedExplanation;
+
+        // JSON에서 사라진 suspicious_interval_count, top_suspicious_phonemes 제거
     }
-
-
 }
