@@ -11,7 +11,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate; // RestTemplate 임포트
-
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
@@ -28,26 +27,10 @@ public class AiWorker {
     private final AiJobQueue aiJobQueue;
     private final RestTemplate restTemplate; // (추가) POST 요청을 위한 RestTemplate
 
-    @Value("${ai.script}")
-    private String scriptPath;
 
-    @Value("${ai.script.image}")
-    private String imageScriptPath;
-
-    @Value("${ai.result}")
-    private String resultPath;
-
-    @Value("${ai.result.img}")
-    private String resultImgPath;
 
     @Value("${backend.url.request}")
     private String backendUrl;
-
-    @Value("${ai.result.example1}")
-    private String resultImgResult1;
-
-    @Value("${ai.result.example2}")
-    private String resultImgResult2;
 
     @Value("${ai.model.execute.path}")
     private String modelExecutePath;
@@ -147,51 +130,55 @@ public class AiWorker {
     }
 
 // ================= [새로 추가된 메서드] =================
+
     /**
      * AI 분석 완료 후 결과 파일(JSON, 이미지)을 찾아 백엔드로 전송
+     * (라이브러리 없이 문자열 치환 방식 사용)
      */
     private void handleAiSuccess(DetectionRequest request) {
         try {
             // 1. 영상 파일명 추출 (확장자 제거)
-            // 예: /path/to/video_123.mp4 -> video_123
             File videoFile = new File(request.getVideoPath());
             String fileName = videoFile.getName();
             int dotIndex = fileName.lastIndexOf('.');
             String baseName = (dotIndex == -1) ? fileName : fileName.substring(0, dotIndex);
 
             // 2. 결과 파일 경로 구성
-            // modelExecutePath + outputs/xai/hybrid/demo_run
             File outputDir = new File(modelExecutePath, "outputs/xai/hybrid/demo_run");
 
-            // 파일 1: JSON 결과
             File resultJsonFile = new File(outputDir, "result.json");
-
-            // 파일 2: 이미지 결과 (파일명 규칙 적용)
-            // 규칙 1: [영상 이름]_pia_xai.png
             File img1 = new File(outputDir, baseName + "_pia_xai.png");
-            // 규칙 2: [영상 이름]_stage1_timeline.png
             File img2 = new File(outputDir, baseName + "_stage1_timeline.png");
 
-            // 3. 파일 존재 여부 확인 및 전송
+            // 3. 파일 존재 여부 확인
             if (resultJsonFile.exists() && img1.exists() && img2.exists()) {
-                // JSON 파일 내용 읽기
+
+                // [수정] 파일 내용을 String으로 읽어옴
                 String jsonContent = Files.readString(resultJsonFile.toPath(), StandardCharsets.UTF_8);
 
-                log.info("결과 파일 로드 성공. 백엔드 전송 시작. RequestId={}", request.getRequestId());
+                // [핵심] 정규식(Regex)을 사용하여 "request_id": "..." 패턴을 찾아 교체
+                // "request_id" \s* (공백0개이상) : \s* (공백0개이상) " (따옴표안의값) "
+                String finalJsonContent = jsonContent.replaceAll(
+                        "\"request_id\"\\s*:\\s*\"[^\"]*\"",
+                        "\"request_id\": \"" + request.getRequestId() + "\""
+                );
 
-                // 백엔드 전송 메서드 호출
-                sendResultToBackend(request.getRequestId(), jsonContent, img1, img2);
+                log.info("JSON request_id 수정 완료 (String 치환): 타겟 ID={}", request.getRequestId());
+
+                // 백엔드 전송
+                sendResultToBackend(request.getRequestId(), finalJsonContent, img1, img2);
+
             } else {
                 log.error("결과 파일 중 일부가 존재하지 않습니다. 경로를 확인하세요.");
                 log.error("JSON: {}, Exists: {}", resultJsonFile.getPath(), resultJsonFile.exists());
-                log.error("Img1: {}, Exists: {}", img1.getPath(), img1.exists());
-                log.error("Img2: {}, Exists: {}", img2.getPath(), img2.exists());
+                // ... 에러 로그 ...
             }
 
         } catch (IOException e) {
             log.error("결과 파일 읽기 실패: {}", e.getMessage());
         }
     }
+
 
     private void sendResultToBackend(String requestId, String jsonResult, File img1, File img2) {
         try {

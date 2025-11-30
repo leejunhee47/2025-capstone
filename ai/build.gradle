@@ -24,6 +24,7 @@ dependencies {
 //    implementation 'org.springframework.boot:spring-boot-starter-security'
     implementation 'org.thymeleaf.extras:thymeleaf-extras-springsecurity6'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.15.2'
 
     // JPA
 //    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
