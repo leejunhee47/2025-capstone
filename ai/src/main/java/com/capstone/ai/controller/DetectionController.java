@@ -84,7 +84,7 @@ public class DetectionController {
 
 
         // 2. 큐에 요청 저장
-        aiJobQueue.addJob(new DetectionRequest(requestId, dest.getPath()));
+//        aiJobQueue.addJob(new DetectionRequest(requestId, dest.getPath()));
 
         // 3. 접수 성공
         return ResponseEntity.ok("Success");
