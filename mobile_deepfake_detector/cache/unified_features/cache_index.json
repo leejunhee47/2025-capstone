@@ -1,0 +1,962 @@
+{
+  "138311_021": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\원본영상\\02_원본영상\\02_원본영상\\138311_021.mp4",
+    "video_id": "138311_021",
+    "npz_path": "138311_021.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "140694_176036_2_0240": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\140694_176036_2_0240.mp4",
+    "video_id": "140694_176036_2_0240",
+    "npz_path": "140694_176036_2_0240.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "138311_173521_2_0061": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\138311_173521_2_0061.mp4",
+    "video_id": "138311_173521_2_0061",
+    "npz_path": "138311_173521_2_0061.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "145482_145482_4_1490": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\145482_145482_4_1490.mp4",
+    "video_id": "145482_145482_4_1490",
+    "npz_path": "145482_145482_4_1490.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_1_1510": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_1_1510.mp4",
+    "video_id": "026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_1_1510",
+    "npz_path": "026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_1_1510.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "106792_086": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\원본영상\\01_원본영상\\01_원본영상\\106792_086.mp4",
+    "video_id": "106792_086",
+    "npz_path": "106792_086.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "165450_027": {
+    "video_path": "E:\\capstone\\..\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\원본영상\\03_원본영상\\03_원본영상\\165450_027.mp4",
+    "video_id": "165450_027",
+    "npz_path": "165450_027.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "103564_c9f5c37976afa879c834_1_0053": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\103564_c9f5c37976afa879c834_1_0053.mp4",
+    "video_id": "103564_c9f5c37976afa879c834_1_0053",
+    "npz_path": "103564_c9f5c37976afa879c834_1_0053.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "103564_c9f5c37976afa879c834_4_0360": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\103564_c9f5c37976afa879c834_4_0360.mp4",
+    "video_id": "103564_c9f5c37976afa879c834_4_0360",
+    "npz_path": "103564_c9f5c37976afa879c834_4_0360.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "165450_106": {
+    "video_path": "E:\\capstone\\..\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\원본영상\\03_원본영상\\03_원본영상\\165450_106.mp4",
+    "video_id": "165450_106",
+    "npz_path": "165450_106.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_4_0034": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_4_0034.mp4",
+    "video_id": "026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_4_0034",
+    "npz_path": "026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_4_0034.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "106792_40068_2_0620": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\106792_40068_2_0620.mp4",
+    "video_id": "106792_40068_2_0620",
+    "npz_path": "106792_40068_2_0620.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "138311_173521_2_1150": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\138311_173521_2_1150.mp4",
+    "video_id": "138311_173521_2_1150",
+    "npz_path": "138311_173521_2_1150.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "167863_045": {
+    "video_path": "E:\\capstone\\..\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\원본영상\\03_원본영상\\03_원본영상\\167863_045.mp4",
+    "video_id": "167863_045",
+    "npz_path": "167863_045.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "0e23d546a5f952542a00_e37c8c26b0c1c0714c74_1_1140": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\0e23d546a5f952542a00_e37c8c26b0c1c0714c74_1_1140.mp4",
+    "video_id": "0e23d546a5f952542a00_e37c8c26b0c1c0714c74_1_1140",
+    "npz_path": "0e23d546a5f952542a00_e37c8c26b0c1c0714c74_1_1140.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "07fc49d464acdc489fc1_122": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\원본영상\\01_원본영상\\01_원본영상\\07fc49d464acdc489fc1_122.mp4",
+    "video_id": "07fc49d464acdc489fc1_122",
+    "npz_path": "07fc49d464acdc489fc1_122.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "132838_100": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\원본영상\\01_원본영상\\01_원본영상\\132838_100.mp4",
+    "video_id": "132838_100",
+    "npz_path": "132838_100.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "132838_132838_4_0051": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\132838_132838_4_0051.mp4",
+    "video_id": "132838_132838_4_0051",
+    "npz_path": "132838_132838_4_0051.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "106792_40068_4_1500": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\106792_40068_4_1500.mp4",
+    "video_id": "106792_40068_4_1500",
+    "npz_path": "106792_40068_4_1500.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "0e23d546a5f952542a00_115": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\원본영상\\01_원본영상\\01_원본영상\\0e23d546a5f952542a00_115.mp4",
+    "video_id": "0e23d546a5f952542a00_115",
+    "npz_path": "0e23d546a5f952542a00_115.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_1_0073": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_1_0073.mp4",
+    "video_id": "026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_1_0073",
+    "npz_path": "026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_1_0073.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "106792_40068_1_0530": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\106792_40068_1_0530.mp4",
+    "video_id": "106792_40068_1_0530",
+    "npz_path": "106792_40068_1_0530.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "106792_40068_2_0150": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\106792_40068_2_0150.mp4",
+    "video_id": "106792_40068_2_0150",
+    "npz_path": "106792_40068_2_0150.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "0e23d546a5f952542a00_107": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\원본영상\\01_원본영상\\01_원본영상\\0e23d546a5f952542a00_107.mp4",
+    "video_id": "0e23d546a5f952542a00_107",
+    "npz_path": "0e23d546a5f952542a00_107.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "106792_40068_2_1370": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\106792_40068_2_1370.mp4",
+    "video_id": "106792_40068_2_1370",
+    "npz_path": "106792_40068_2_1370.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "167436_023": {
+    "video_path": "E:\\capstone\\..\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\원본영상\\03_원본영상\\03_원본영상\\167436_023.mp4",
+    "video_id": "167436_023",
+    "npz_path": "167436_023.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "140694_057": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\원본영상\\02_원본영상\\02_원본영상\\140694_057.mp4",
+    "video_id": "140694_057",
+    "npz_path": "140694_057.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "0e105f8ec5146f9737d0_026f9b9514f28f37a3fd_2_1020": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\0e105f8ec5146f9737d0_026f9b9514f28f37a3fd_2_1020.mp4",
+    "video_id": "0e105f8ec5146f9737d0_026f9b9514f28f37a3fd_2_1020",
+    "npz_path": "0e105f8ec5146f9737d0_026f9b9514f28f37a3fd_2_1020.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "106792_40068_4_0910": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\106792_40068_4_0910.mp4",
+    "video_id": "106792_40068_4_0910",
+    "npz_path": "106792_40068_4_0910.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "106792_40068_4_0470": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\106792_40068_4_0470.mp4",
+    "video_id": "106792_40068_4_0470",
+    "npz_path": "106792_40068_4_0470.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "0e105f8ec5146f9737d0_026f9b9514f28f37a3fd_4_1300": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\0e105f8ec5146f9737d0_026f9b9514f28f37a3fd_4_1300.mp4",
+    "video_id": "0e105f8ec5146f9737d0_026f9b9514f28f37a3fd_4_1300",
+    "npz_path": "0e105f8ec5146f9737d0_026f9b9514f28f37a3fd_4_1300.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "161592_022": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\원본영상\\02_원본영상\\02_원본영상\\161592_022.mp4",
+    "video_id": "161592_022",
+    "npz_path": "161592_022.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "156723_168153_1_0490": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\156723_168153_1_0490.mp4",
+    "video_id": "156723_168153_1_0490",
+    "npz_path": "156723_168153_1_0490.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "132838_141": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\원본영상\\01_원본영상\\01_원본영상\\132838_141.mp4",
+    "video_id": "132838_141",
+    "npz_path": "132838_141.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "07fc49d464acdc489fc1_bf13848f7f02f488b2e1_4_1870": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\07fc49d464acdc489fc1_bf13848f7f02f488b2e1_4_1870.mp4",
+    "video_id": "07fc49d464acdc489fc1_bf13848f7f02f488b2e1_4_1870",
+    "npz_path": "07fc49d464acdc489fc1_bf13848f7f02f488b2e1_4_1870.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "140694_176036_2_1170": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\140694_176036_2_1170.mp4",
+    "video_id": "140694_176036_2_1170",
+    "npz_path": "140694_176036_2_1170.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "145482_145482_5_0660": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\145482_145482_5_0660.mp4",
+    "video_id": "145482_145482_5_0660",
+    "npz_path": "145482_145482_5_0660.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "0e105f8ec5146f9737d0_026f9b9514f28f37a3fd_1_1450": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\0e105f8ec5146f9737d0_026f9b9514f28f37a3fd_1_1450.mp4",
+    "video_id": "0e105f8ec5146f9737d0_026f9b9514f28f37a3fd_1_1450",
+    "npz_path": "0e105f8ec5146f9737d0_026f9b9514f28f37a3fd_1_1450.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "140694_176036_1_0920": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\140694_176036_1_0920.mp4",
+    "video_id": "140694_176036_1_0920",
+    "npz_path": "140694_176036_1_0920.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "167863_117": {
+    "video_path": "E:\\capstone\\..\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\원본영상\\03_원본영상\\03_원본영상\\167863_117.mp4",
+    "video_id": "167863_117",
+    "npz_path": "167863_117.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "106792_40068_2_0074": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\106792_40068_2_0074.mp4",
+    "video_id": "106792_40068_2_0074",
+    "npz_path": "106792_40068_2_0074.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "0e105f8ec5146f9737d0_026f9b9514f28f37a3fd_1_1230": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\0e105f8ec5146f9737d0_026f9b9514f28f37a3fd_1_1230.mp4",
+    "video_id": "0e105f8ec5146f9737d0_026f9b9514f28f37a3fd_1_1230",
+    "npz_path": "0e105f8ec5146f9737d0_026f9b9514f28f37a3fd_1_1230.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "164756_138": {
+    "video_path": "E:\\capstone\\..\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\원본영상\\03_원본영상\\03_원본영상\\164756_138.mp4",
+    "video_id": "164756_138",
+    "npz_path": "164756_138.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_2_1530": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_2_1530.mp4",
+    "video_id": "026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_2_1530",
+    "npz_path": "026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_2_1530.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "0e23d546a5f952542a00_e37c8c26b0c1c0714c74_4_1700": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\0e23d546a5f952542a00_e37c8c26b0c1c0714c74_4_1700.mp4",
+    "video_id": "0e23d546a5f952542a00_e37c8c26b0c1c0714c74_4_1700",
+    "npz_path": "0e23d546a5f952542a00_e37c8c26b0c1c0714c74_4_1700.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "113995_022": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\원본영상\\01_원본영상\\01_원본영상\\113995_022.mp4",
+    "video_id": "113995_022",
+    "npz_path": "113995_022.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_1_0850": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\변조영상\\01_변조영상\\01_변조영상\\026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_1_0850.mp4",
+    "video_id": "026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_1_0850",
+    "npz_path": "026f9b9514f28f37a3fd_0e105f8ec5146f9737d0_1_0850.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  },
+  "026f9b9514f28f37a3fd_027": {
+    "video_path": "E:\\capstone\\real_deepfake_dataset\\003.딥페이크\\1.Training\\원천데이터\\train_탐지방해\\원본영상\\01_원본영상\\01_원본영상\\026f9b9514f28f37a3fd_027.mp4",
+    "video_id": "026f9b9514f28f37a3fd_027",
+    "npz_path": "026f9b9514f28f37a3fd_027.npz",
+    "keys": [
+      "frames_30fps",
+      "timestamps_30fps",
+      "audio",
+      "phoneme_labels_30fps",
+      "phoneme_intervals",
+      "mar_30fps",
+      "arcface_30fps",
+      "frames_10fps",
+      "lip_10fps",
+      "duration",
+      "fps",
+      "whisper_result",
+      "timings"
+    ]
+  }
+}

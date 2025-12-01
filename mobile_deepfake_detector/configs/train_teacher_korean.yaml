@@ -1,0 +1,204 @@
+# Teacher Model Training Configuration (Korean Dataset)
+# MMMS-BA (Multi-Modal Multi-Sequence Bi-Modal Attention)
+
+experiment:
+  name: "teacher_mmms_ba_korean_v1"
+  seed: 42
+  device: "cuda"  # cuda | cpu
+  num_gpus: 1
+
+# Model Architecture
+# NOTE: visual_dim=256, lip_dim=128 are hardcoded in train.py (from feature extractors)
+# These dimensions come from the preprocessing pipeline and cannot be changed via config
+model:
+  name: "MMMS_BA"
+
+  # GRU Configuration
+  gru:
+    hidden_size: 300  # GRU hidden dimension (bi-directional output: 300*2 = 600)
+    num_layers: 1
+    dropout: 0.3  # 논문 기반: 0.3 (기존 0.5에서 감소)
+    recurrent_dropout: 0.3  # 논문 기반: 0.3 (기존 0.5에서 감소)
+    bidirectional: true
+
+  # Input Dimensions (Hardcoded in train.py - for reference only)
+  # audio_dim: 40 (MFCC coefficients from config below)
+  # visual_dim: 256 (from ResNet feature extractor)
+  # lip_dim: 128 (from lip ROI feature extractor)
+
+  # Dense Layer
+  dense:
+    hidden_size: 100
+    dropout: 0.3  # 논문 기반: 0.3 (기존 0.7에서 크게 감소 - 과도한 정규화 완화)
+    activation: "tanh"
+
+  # Attention
+  attention:
+    type: "bi_modal"  # bi_modal | self | none
+    num_heads: 12
+
+  # Output
+  num_classes: 2  # Real, Fake
+
+# Dataset
+dataset:
+  name: "Korean_Deepfake"
+  root_dir: "E:/capstone/preprocessed_data_phoneme"  # 음소 라벨 포함 데이터셋
+
+  # Modalities
+  modalities:
+    - audio
+    - visual
+    - lip
+
+  # Video Settings (Shorts optimized)
+  video:
+    max_duration: 60  # seconds
+    min_duration: 10  # 한국어 데이터셋은 더 짧을 수 있음
+    target_fps: 30
+    max_frames: 50
+    frame_size: [224, 224]
+
+  # Audio Settings
+  audio:
+    sample_rate: 16000
+    n_mfcc: 40
+    hop_length: 512
+    n_fft: 2048
+
+  # Lip Region
+  lip:
+    size: [112, 112]
+    detector: "haar_cascade"  # haar_cascade | dlib
+
+  # Split
+  train_split: 0.7
+  val_split: 0.15
+  test_split: 0.15
+
+  # Data Augmentation (경량화)
+  augmentation:
+    enabled: true
+
+    # Video augmentation
+    video_aug:
+      - type: "compression"
+        params:
+          codecs: ["h264"]
+          crf: [23, 28]
+          prob: 0.3
+
+      - type: "noise"
+        params:
+          std: [0.01, 0.03]
+          prob: 0.2
+
+      - type: "color_jitter"
+        params:
+          brightness: 0.1
+          contrast: 0.1
+          saturation: 0.1
+          hue: 0.05
+          prob: 0.3
+
+    # Audio augmentation
+    audio_aug:
+      - type: "noise"
+        params:
+          snr_db: [15, 25]
+          prob: 0.2
+
+# Training
+training:
+  # Optimizer
+  optimizer:
+    type: "adam"
+    lr: 0.0005  # 한국어 데이터셋이 작으므로 낮은 학습률
+    betas: [0.9, 0.999]
+    weight_decay: 0.0001
+
+  # Scheduler
+  scheduler:
+    type: "cosine"
+    T_max: 15  # 15 에폭에 맞춤
+    eta_min: 0.00001
+
+  # Loss
+  loss:
+    type: "cross_entropy"
+    label_smoothing: 0.1
+
+  # Training Settings
+  epochs: 15  # 테스트용 (원래: 15)
+  batch_size: 16  # 논문 기반: 32가 이상적이나, GPU 메모리 고려하여 16으로 설정 (기존 8에서 2배 증가)
+  num_workers: 0  # Windows 메모리 에러 방지
+
+  # ⚡ 병렬 학습 최적화
+  use_prefetch: false  # 메모리 안정성 우선
+  gradient_accumulation_steps: 1  # Batch size 증가로 인해 감소
+  use_compile: false  # 메모리 절약
+
+  # Gradient Clipping
+  grad_clip:
+    enabled: true
+    max_norm: 1.0
+
+  # Mixed Precision (FP16)
+  mixed_precision: true
+
+  # Checkpointing
+  checkpoint:
+    save_best: true
+    save_last: true
+    monitor: "val_acc"
+    mode: "max"
+    save_dir: "models/checkpoints"
+    prefix: "mmms-ba_"  # K-Fold: mmms-ba_best.pth, 일반: mmms-ba_best_balanced.pth (weighted sampler/loss 적용)
+
+  # Early Stopping
+  early_stopping:
+    enabled: true
+    patience: 5  # epoch 15이므로 여유 필요
+    monitor: "val_loss"
+    mode: "min"
+
+  # Class Imbalance Handling (논문 기반 최적화)
+  # 2025-11-17 분석 결과: Weighted Sampler/Loss가 오히려 FAKE bias 악화
+  # - 97.6% val_acc 달성했으나, REAL 샘플의 73-77%를 FAKE로 오분류
+  # - Frame-level 분석: 99-100%의 REAL 프레임이 FAKE로 예측됨
+  #
+  # 논문의 접근법: Class imbalance를 직접 다루지 않고, 충분한 데이터와 적절한 정규화로 해결
+  # → Dropout 0.3, Batch size 32, 자연스러운 학습 과정에서 균형 학습
+  use_weighted_sampler: false  # 논문 기반: 비활성화 (자연스러운 샘플링)
+  use_weighted_loss: false     # 논문 기반: 비활성화 (표준 Cross Entropy)
+  class_weights: [1.0, 1.0]    # 동일 가중치 - 모델이 데이터에서 직접 학습
+
+  # Logging
+  logging:
+    interval: 5  # steps
+    wandb:
+      enabled: false
+      project: "mobile_deepfake_detector"
+      entity: "your_username"
+
+# Validation
+validation:
+  interval: 1  # epochs
+  batch_size: 16
+
+# Metrics
+metrics:
+  - accuracy
+  - precision
+  - recall
+  - f1_score
+  - auc
+
+# Paths
+paths:
+  data_dir: "E:/capstone/preprocessed_data_phoneme"
+  model_dir: "models"
+  log_dir: "logs"
+  log_file: "mmms-ba_train.log"
+  output_dir: "outputs/mmms-ba"
+
