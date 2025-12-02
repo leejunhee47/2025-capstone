@@ -403,10 +403,11 @@ class ResultAggregator:
         detection: Dict[str, Any],
         summary: Dict[str, Any],
         video_info: Dict[str, Any],
-        processing_time_ms: float
+        processing_time_ms: float,
+        suspicious_intervals: list = None
     ) -> Dict[str, Any]:
         """
-        최종 결과를 구성합니다 (간소화 버전).
+        최종 결과를 구성합니다.
 
         Args:
             video_path: 비디오 파일 경로
@@ -415,11 +416,17 @@ class ResultAggregator:
             summary: 한국어 요약
             video_info: 비디오 정보
             processing_time_ms: 처리 시간 (밀리초)
+            suspicious_intervals: 의심 구간 리스트
 
         Returns:
-            최종 결과 딕셔너리 (4개 필드: metadata, video_info, detection, summary)
+            최종 결과 딕셔너리
         """
         request_id = f"req_{uuid.uuid4().hex[:8]}"
+
+        # 의심 구간 프레임 개수 추가
+        suspicious_frame_count = 0
+        if suspicious_intervals and len(suspicious_intervals) > 0:
+            suspicious_frame_count = suspicious_intervals[0].get('frame_count', 0)
 
         return {
             'metadata': {
@@ -431,5 +438,6 @@ class ResultAggregator:
             },
             'video_info': video_info,
             'detection': detection,
-            'summary': summary
+            'summary': summary,
+            'suspicious_frame_count': suspicious_frame_count
         }
