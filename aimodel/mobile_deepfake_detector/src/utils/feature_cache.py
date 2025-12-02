@@ -93,11 +93,8 @@ class FeatureCache:
         return hashlib.md5(str(video_path).encode()).hexdigest()[:8]
 
     def _get_cache_key(self, video_path: str) -> str:
-        """Generate unique cache key for video."""
-        video_id = self.get_video_id(video_path)
-        # Include path hash to avoid collisions
-        path_hash = self.get_video_hash(video_path)
-        return f"{video_id}_{path_hash}"
+        """Generate unique cache key for video (filename only, no path hash)."""
+        return self.get_video_id(video_path)
 
     def _get_npz_path(self, cache_key: str) -> Path:
         """Get NPZ file path for cache key."""
