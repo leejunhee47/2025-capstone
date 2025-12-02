@@ -405,14 +405,15 @@ class HybridXAIPipeline:
 
         processing_time_ms = (time.time() - start_time) * 1000
         
-        # Final Result (간소화: 4개 필드만 반환)
+        # Final Result
         result = self.aggregator.build_final_result(
             video_path=local_video_path,
             video_id=video_id,
             detection=detection,
             summary=summary,
             video_info=video_info,
-            processing_time_ms=processing_time_ms
+            processing_time_ms=processing_time_ms,
+            suspicious_intervals=suspicious_intervals
         )
         
         # Save JSON

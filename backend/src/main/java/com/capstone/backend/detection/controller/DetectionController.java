@@ -89,8 +89,8 @@ public class DetectionController {
 
             // 2-2. 파일 저장 로직
             String originalFilename = file.getOriginalFilename() != null ? file.getOriginalFilename() : "video.mp4";
-            String uniqueFileName = newRequest.getRequestId() + "_" + originalFilename;
-            dest = new File(uploadDir + File.separator + uniqueFileName);
+//            String uniqueFileName = newRequest.getRequestId() + "_" + originalFilename;
+            dest = new File(uploadDir + File.separator + originalFilename);
 
             // 2-3. 파일 저장 (동기식으로 먼저 실행)
             file.transferTo(dest);
